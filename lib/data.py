@@ -1,4 +1,5 @@
 import os
+from os.path import join as pjoin, exists as pexists
 import bz2
 import numpy as np
 import pandas as pd
@@ -12,16 +13,21 @@ from sklearn.model_selection import train_test_split
 
 from .utils import download
 from sklearn.datasets import load_svmlight_file
-from sklearn.preprocessing import QuantileTransformer
+from sklearn.preprocessing import QuantileTransformer, StandardScaler
+from sklearn.compose import ColumnTransformer
 from category_encoders import LeaveOneOutEncoder
+from zipfile import ZipFile
+import requests
 
 
-class Dataset:
+class MyPreprocessor:
 
-    def __init__(self, dataset, random_state, data_path='./data', normalize=False,
-                 quantile_transform=False, output_distribution='normal', quantile_noise=0, **kwargs):
+    def __init__(self, random_state=1377, cat_features=None, normalize=False,
+                 y_normalize=False, quantile_transform=False,
+                 output_distribution='normal',
+                 quantile_noise=0, **kwargs):
         """
-        Dataset is a dataclass that contains all training and evaluation data required for an experiment
+        Preprocessor is a dataclass that contains all training and evaluation data required for an experiment
         :param dataset: a pre-defined dataset name (see DATSETS) or a custom dataset
             Your dataset should be at (or will be downloaded into) {data_path}/{dataset}
         :param random_state: global random seed for an experiment
@@ -37,67 +43,122 @@ class Dataset:
         :param kwargs: depending on the dataset, you may select train size, test size or other params
             If dataset is not in DATASETS, provide six keys: X_train, y_train, X_valid, y_valid, X_test and y_test
         """
-        np.random.seed(random_state)
-        torch.manual_seed(random_state)
-        random.seed(random_state)
+        self.random_state = random_state
+        self.cat_features = cat_features
+        self.normalize = normalize
+        self.y_normalize = y_normalize
+        self.quantile_transform = quantile_transform
+        self.output_distribution = output_distribution
+        self.quantile_noise = quantile_noise
 
-        if dataset in DATASETS:
-            data_dict = DATASETS[dataset](os.path.join(data_path, dataset), **kwargs)
-        else:
-            assert all(key in kwargs for key in ('X_train', 'y_train', 'X_valid', 'y_valid', 'X_test', 'y_test')), \
-                "Unknown dataset. Provide X_train, y_train, X_valid, y_valid, X_test and y_test params"
-            data_dict = kwargs
+        self.transformers = []
+        self.y_mu, self.y_std = None, None
+        self.feature_names = None
 
-        self.data_path = data_path
-        self.dataset = dataset
+    def fit(self, X, y=None):
+        assert isinstance(X, pd.DataFrame), 'X is not a dataframe! %s' % type(X)
+        self.feature_names = X.columns
 
-        self.X_train = data_dict['X_train']
-        self.y_train = data_dict['y_train']
-        self.X_valid = data_dict['X_valid']
-        self.y_valid = data_dict['y_valid']
-        self.X_test = data_dict['X_test']
-        self.y_test = data_dict['y_test']
+        if self.cat_features is not None:
+            cat_encoder = LeaveOneOutEncoder(cols=self.cat_features)
+            cat_encoder.fit(X, y)
+            self.transformers.append(cat_encoder)
 
-        if all(query in data_dict.keys() for query in ('query_train', 'query_valid', 'query_test')):
-            self.query_train = data_dict['query_train']
-            self.query_valid = data_dict['query_valid']
-            self.query_test = data_dict['query_test']
+        if self.normalize:
+            scaler = StandardScaler(copy=False)
+            scaler.fit(X)
+            self.transformers.append(scaler)
 
-        if normalize:
-            mean = np.mean(self.X_train, axis=0)
-            std = np.std(self.X_train, axis=0)
-            self.X_train = (self.X_train - mean) / std
-            self.X_valid = (self.X_valid - mean) / std
-            self.X_test = (self.X_test - mean) / std
+        if self.quantile_transform:
+            quantile_train = X.copy()
+            if self.cat_features is not None:
+                quantile_train = cat_encoder.transform(quantile_train)
 
-        if quantile_transform:
-            quantile_train = np.copy(self.X_train)
-            if quantile_noise:
-                stds = np.std(quantile_train, axis=0, keepdims=True)
-                noise_std = quantile_noise / np.maximum(stds, quantile_noise)
-                quantile_train += noise_std * np.random.randn(*quantile_train.shape)
+            if self.quantile_noise:
+                r = np.random.RandomState(self.random_state)
+                stds = np.std(quantile_train.values, axis=0, keepdims=True)
+                noise_std = self.quantile_noise / np.maximum(stds, self.quantile_noise)
+                quantile_train += noise_std * r.randn(*quantile_train.shape)
 
-            qt = QuantileTransformer(random_state=random_state, output_distribution=output_distribution).fit(quantile_train)
-            self.X_train = qt.transform(self.X_train)
-            self.X_valid = qt.transform(self.X_valid)
-            self.X_test = qt.transform(self.X_test)
+            qt = QuantileTransformer(random_state=self.random_state,
+                                     output_distribution=self.output_distribution,
+                                     copy=False)
+            # if self.cat_features is not None:
+            #     conti_fs = [f for f in self.feature_names if f not in self.cat_features]
+            #     qt = ColumnTransformer(transformers=[("quantile", qt, conti_fs)],
+            #                            remainder='passthrough')
+            qt.fit(quantile_train)
+            self.transformers.append(qt)
 
-    def to_csv(self, path=None):
-        if path == None:
-            path = os.path.join(self.data_path, self.dataset)
+        if y is not None and self.y_normalize:
+            self.y_mu, self.y_std = y.mean(), y.std()
+            print("Normalize y. mean = %.5f, std = %.5f" % (self.y_mu, self.y_std))
+            assert self.y_std != 0, 'y_std is 0! Wrong y passed in'
 
-        np.savetxt(os.path.join(path, 'X_train.csv'), self.X_train, delimiter=',')
-        np.savetxt(os.path.join(path, 'X_valid.csv'), self.X_valid, delimiter=',')
-        np.savetxt(os.path.join(path, 'X_test.csv'), self.X_test, delimiter=',')
-        np.savetxt(os.path.join(path, 'y_train.csv'), self.y_train, delimiter=',')
-        np.savetxt(os.path.join(path, 'y_valid.csv'), self.y_valid, delimiter=',')
-        np.savetxt(os.path.join(path, 'y_test.csv'), self.y_test, delimiter=',')
+    def transform(self, *args):
+        assert len(args) <= 2, 'Wrong arguments in transform() with more than 2 inputs'
+
+        X = args[0]
+        if len(self.transformers) > 0:
+            X = X.copy()
+            if isinstance(X, np.ndarray):
+                X = pd.DataFrame(X, columns=self.feature_names)
+
+            for t in self.transformers:
+                X = t.transform(X)
+            # The LeaveOneOutEncoder makes it as np.float64 instead of 32
+            X = X.astype(np.float32)
+
+        if len(args) == 1: # self.transform(X)
+            return X
+
+        # self.transform(X, y)
+        y = args[1]
+        if self.y_normalize and self.y_mu is not None and self.y_std is not None:
+            y = (y - self.y_mu) / self.y_std
+
+        return X, y
 
 
-def fetch_A9A(path, train_size=None, valid_size=None, test_size=None):
-    train_path = os.path.join(path, 'a9a')
-    test_path = os.path.join(path, 'a9a.t')
-    if not all(os.path.exists(fname) for fname in (train_path, test_path)):
+def download_file_from_google_drive(id, destination):
+    '''
+    https://stackoverflow.com/questions/38511444/python-download-files-from-google-drive-using-url
+    '''
+    def get_confirm_token(response):
+        for key, value in response.cookies.items():
+            if key.startswith('download_warning'):
+                return value
+
+        return None
+
+    def save_response_content(response, destination):
+        CHUNK_SIZE = 32768
+
+        with open(destination, "wb") as f:
+            for chunk in response.iter_content(CHUNK_SIZE):
+                if chunk: # filter out keep-alive new chunks
+                    f.write(chunk)
+
+    URL = "https://docs.google.com/uc?export=download"
+
+    session = requests.Session()
+
+    response = session.get(URL, params = { 'id' : id }, stream = True)
+    token = get_confirm_token(response)
+
+    if token:
+        params = { 'id' : id, 'confirm' : token }
+        response = session.get(URL, params = params, stream = True)
+
+    save_response_content(response, destination)
+
+
+def fetch_A9A(path='./data/', train_size=None, valid_size=None, test_size=None, fold=0):
+    path = pjoin(path, 'A9A')
+
+    train_path = pjoin(path, 'a9a')
+    test_path = pjoin(path, 'a9a.t')
+    if not all(pexists(fname) for fname in (train_path, test_path)):
         os.makedirs(path, exist_ok=True)
         download("https://www.dropbox.com/s/9cqdx166iwonrj9/a9a?dl=1", train_path)
         download("https://www.dropbox.com/s/sa0ds895c0v4xc6/a9a.t?dl=1", test_path)
@@ -110,9 +171,9 @@ def fetch_A9A(path, train_size=None, valid_size=None, test_size=None):
     y_train, y_test = y_train.astype(np.int), y_test.astype(np.int)
 
     if all(sizes is None for sizes in (train_size, valid_size, test_size)):
-        train_idx_path = os.path.join(path, 'stratified_train_idx.txt')
-        valid_idx_path = os.path.join(path, 'stratified_valid_idx.txt')
-        if not all(os.path.exists(fname) for fname in (train_idx_path, valid_idx_path)):
+        train_idx_path = pjoin(path, 'stratified_train_idx.txt')
+        valid_idx_path = pjoin(path, 'stratified_valid_idx.txt')
+        if not all(pexists(fname) for fname in (train_idx_path, valid_idx_path)):
             download("https://www.dropbox.com/s/xy4wwvutwikmtha/stratified_train_idx.txt?dl=1", train_idx_path)
             download("https://www.dropbox.com/s/nthpxofymrais5s/stratified_test_idx.txt?dl=1", valid_idx_path)
         train_idx = pd.read_csv(train_idx_path, header=None)[0].values
@@ -130,23 +191,26 @@ def fetch_A9A(path, train_size=None, valid_size=None, test_size=None):
 
         shuffled_indices = np.random.permutation(np.arange(len(X_train)))
         train_idx = shuffled_indices[:train_size]
-        valid_idx = shuffled_indices[train_size: train_size + valid_size]    
+        valid_idx = shuffled_indices[train_size: train_size + valid_size]
 
     return dict(
         X_train=X_train[train_idx], y_train=y_train[train_idx],
         X_valid=X_train[valid_idx], y_valid=y_train[valid_idx],
-        X_test=X_test, y_test=y_test
+        X_test=X_test, y_test=y_test,
+        problem='classification',
     )
 
 
-def fetch_EPSILON(path, train_size=None, valid_size=None, test_size=None):
-    train_path = os.path.join(path, 'epsilon_normalized')
-    test_path = os.path.join(path, 'epsilon_normalized.t')
-    if not all(os.path.exists(fname) for fname in (train_path, test_path)):
+def fetch_EPSILON(path='./data/', train_size=None, valid_size=None, test_size=None, fold=0):
+    path = pjoin(path, 'EPSILON')
+
+    train_path = pjoin(path, 'epsilon_normalized')
+    test_path = pjoin(path, 'epsilon_normalized.t')
+    if not all(pexists(fname) for fname in (train_path, test_path)):
         os.makedirs(path, exist_ok=True)
-        train_archive_path = os.path.join(path, 'epsilon_normalized.bz2')
-        test_archive_path = os.path.join(path, 'epsilon_normalized.t.bz2')
-        if not all(os.path.exists(fname) for fname in (train_archive_path, test_archive_path)):
+        train_archive_path = pjoin(path, 'epsilon_normalized.bz2')
+        test_archive_path = pjoin(path, 'epsilon_normalized.t.bz2')
+        if not all(pexists(fname) for fname in (train_archive_path, test_archive_path)):
             download("https://www.csie.ntu.edu.tw/~cjlin/libsvmtools/datasets/binary/epsilon_normalized.bz2", train_archive_path)
             download("https://www.csie.ntu.edu.tw/~cjlin/libsvmtools/datasets/binary/epsilon_normalized.t.bz2", test_archive_path)
         print("unpacking dataset")
@@ -164,9 +228,9 @@ def fetch_EPSILON(path, train_size=None, valid_size=None, test_size=None):
     y_test[y_test == -1] = 0
 
     if all(sizes is None for sizes in (train_size, valid_size, test_size)):
-        train_idx_path = os.path.join(path, 'stratified_train_idx.txt')
-        valid_idx_path = os.path.join(path, 'stratified_valid_idx.txt')
-        if not all(os.path.exists(fname) for fname in (train_idx_path, valid_idx_path)):
+        train_idx_path = pjoin(path, 'stratified_train_idx.txt')
+        valid_idx_path = pjoin(path, 'stratified_valid_idx.txt')
+        if not all(pexists(fname) for fname in (train_idx_path, valid_idx_path)):
             download("https://www.dropbox.com/s/wxgm94gvm6d3xn5/stratified_train_idx.txt?dl=1", train_idx_path)
             download("https://www.dropbox.com/s/fm4llo5uucdglti/stratified_valid_idx.txt?dl=1", valid_idx_path)
         train_idx = pd.read_csv(train_idx_path, header=None)[0].values
@@ -186,20 +250,26 @@ def fetch_EPSILON(path, train_size=None, valid_size=None, test_size=None):
         train_idx = shuffled_indices[:train_size]
         valid_idx = shuffled_indices[train_size: train_size + valid_size]
 
+    X_train = pd.DataFrame(X_train)
+    X_test = pd.DataFrame(X_test)
+
     return dict(
-        X_train=X_train[train_idx], y_train=y_train[train_idx],
-        X_valid=X_train[valid_idx], y_valid=y_train[valid_idx],
-        X_test=X_test, y_test=y_test
+        X_train=X_train.iloc[train_idx], y_train=y_train[train_idx],
+        X_valid=X_train.iloc[valid_idx], y_valid=y_train[valid_idx],
+        X_test=X_test, y_test=y_test,
+        problem='classification',
     )
 
 
-def fetch_PROTEIN(path, train_size=None, valid_size=None, test_size=None):
+def fetch_PROTEIN(path='./data/', train_size=None, valid_size=None, test_size=None, fold=0):
     """
     https://www.csie.ntu.edu.tw/~cjlin/libsvmtools/datasets/multiclass.html#protein
     """
-    train_path = os.path.join(path, 'protein')
-    test_path = os.path.join(path, 'protein.t')
-    if not all(os.path.exists(fname) for fname in (train_path, test_path)):
+    path = pjoin(path, 'PROTEIN')
+
+    train_path = pjoin(path, 'protein')
+    test_path = pjoin(path, 'protein.t')
+    if not all(pexists(fname) for fname in (train_path, test_path)):
         os.makedirs(path, exist_ok=True)
         download("https://www.dropbox.com/s/pflp4vftdj3qzbj/protein.tr?dl=1", train_path)
         download("https://www.dropbox.com/s/z7i5n0xdcw57weh/protein.t?dl=1", test_path)
@@ -214,9 +284,9 @@ def fetch_PROTEIN(path, train_size=None, valid_size=None, test_size=None):
     y_train, y_test = y_train.astype(np.int), y_test.astype(np.int)
 
     if all(sizes is None for sizes in (train_size, valid_size, test_size)):
-        train_idx_path = os.path.join(path, 'stratified_train_idx.txt')
-        valid_idx_path = os.path.join(path, 'stratified_valid_idx.txt')
-        if not all(os.path.exists(fname) for fname in (train_idx_path, valid_idx_path)):
+        train_idx_path = pjoin(path, 'stratified_train_idx.txt')
+        valid_idx_path = pjoin(path, 'stratified_valid_idx.txt')
+        if not all(pexists(fname) for fname in (train_idx_path, valid_idx_path)):
             download("https://www.dropbox.com/s/wq2v9hl1wxfufs3/small_stratified_train_idx.txt?dl=1", train_idx_path)
             download("https://www.dropbox.com/s/7o9el8pp1bvyy22/small_stratified_valid_idx.txt?dl=1", valid_idx_path)
         train_idx = pd.read_csv(train_idx_path, header=None)[0].values
@@ -236,16 +306,21 @@ def fetch_PROTEIN(path, train_size=None, valid_size=None, test_size=None):
         train_idx = shuffled_indices[:train_size]
         valid_idx = shuffled_indices[train_size: train_size + valid_size]
 
+    X_train = pd.DataFrame(X_train)
+    X_test = pd.DataFrame(X_test)
+
     return dict(
-        X_train=X_train[train_idx], y_train=y_train[train_idx],
-        X_valid=X_train[valid_idx], y_valid=y_train[valid_idx],
+        X_train=X_train.iloc[train_idx], y_train=y_train[train_idx],
+        X_valid=X_train.iloc[valid_idx], y_valid=y_train[valid_idx],
         X_test=X_test, y_test=y_test
     )
 
 
-def fetch_YEAR(path, train_size=None, valid_size=None, test_size=51630):
-    data_path = os.path.join(path, 'data.csv')
-    if not os.path.exists(data_path):
+def fetch_YEAR(path='./data/', train_size=None, valid_size=None, test_size=51630, fold=0):
+    path = pjoin(path, 'YEAR')
+
+    data_path = pjoin(path, 'data.csv')
+    if not pexists(data_path):
         os.makedirs(path, exist_ok=True)
         download('https://www.dropbox.com/s/l09pug0ywaqsy0e/YearPredictionMSD.txt?dl=1', data_path)
     n_features = 91
@@ -257,9 +332,9 @@ def fetch_YEAR(path, train_size=None, valid_size=None, test_size=51630):
     X_test, y_test = data_test.iloc[:, 1:].values, data_test.iloc[:, 0].values
 
     if all(sizes is None for sizes in (train_size, valid_size)):
-        train_idx_path = os.path.join(path, 'stratified_train_idx.txt')
-        valid_idx_path = os.path.join(path, 'stratified_valid_idx.txt')
-        if not all(os.path.exists(fname) for fname in (train_idx_path, valid_idx_path)):
+        train_idx_path = pjoin(path, 'stratified_train_idx.txt')
+        valid_idx_path = pjoin(path, 'stratified_valid_idx.txt')
+        if not all(pexists(fname) for fname in (train_idx_path, valid_idx_path)):
             download("https://www.dropbox.com/s/00u6cnj9mthvzj1/stratified_train_idx.txt?dl=1", train_idx_path)
             download("https://www.dropbox.com/s/420uhjvjab1bt7k/stratified_valid_idx.txt?dl=1", valid_idx_path)
         train_idx = pd.read_csv(train_idx_path, header=None)[0].values
@@ -277,18 +352,23 @@ def fetch_YEAR(path, train_size=None, valid_size=None, test_size=51630):
         train_idx = shuffled_indices[:train_size]
         valid_idx = shuffled_indices[train_size: train_size + valid_size]
 
+    X_train = pd.DataFrame(X_train)
+    X_test = pd.DataFrame(X_test)
     return dict(
-        X_train=X_train[train_idx], y_train=y_train[train_idx],
-        X_valid=X_train[valid_idx], y_valid=y_train[valid_idx],
+        X_train=X_train.iloc[train_idx], y_train=y_train[train_idx],
+        X_valid=X_train.iloc[valid_idx], y_valid=y_train[valid_idx],
         X_test=X_test, y_test=y_test,
+        problem='regression',
     )
 
 
-def fetch_HIGGS(path, train_size=None, valid_size=None, test_size=5 * 10 ** 5):
-    data_path = os.path.join(path, 'higgs.csv')
-    if not os.path.exists(data_path):
+def fetch_HIGGS(path='./data/', train_size=None, valid_size=None, test_size=5 * 10 ** 5, fold=0):
+    path = pjoin(path, 'HIGGS')
+
+    data_path = pjoin(path, 'higgs.csv')
+    if not pexists(data_path):
         os.makedirs(path, exist_ok=True)
-        archive_path = os.path.join(path, 'HIGGS.csv.gz')
+        archive_path = pjoin(path, 'HIGGS.csv.gz')
         download('https://archive.ics.uci.edu/ml/machine-learning-databases/00280/HIGGS.csv.gz', archive_path)
         with gzip.open(archive_path, 'rb') as f_in:
             with open(data_path, 'wb') as f_out:
@@ -302,9 +382,9 @@ def fetch_HIGGS(path, train_size=None, valid_size=None, test_size=5 * 10 ** 5):
     X_test, y_test = data_test.iloc[:, 1:].values, data_test.iloc[:, 0].values
 
     if all(sizes is None for sizes in (train_size, valid_size)):
-        train_idx_path = os.path.join(path, 'stratified_train_idx.txt')
-        valid_idx_path = os.path.join(path, 'stratified_valid_idx.txt')
-        if not all(os.path.exists(fname) for fname in (train_idx_path, valid_idx_path)):
+        train_idx_path = pjoin(path, 'stratified_train_idx.txt')
+        valid_idx_path = pjoin(path, 'stratified_valid_idx.txt')
+        if not all(pexists(fname) for fname in (train_idx_path, valid_idx_path)):
             download("https://www.dropbox.com/s/i2uekmwqnp9r4ix/stratified_train_idx.txt?dl=1", train_idx_path)
             download("https://www.dropbox.com/s/wkbk74orytmb2su/stratified_valid_idx.txt?dl=1", valid_idx_path)
         train_idx = pd.read_csv(train_idx_path, header=None)[0].values
@@ -322,17 +402,22 @@ def fetch_HIGGS(path, train_size=None, valid_size=None, test_size=5 * 10 ** 5):
         train_idx = shuffled_indices[:train_size]
         valid_idx = shuffled_indices[train_size: train_size + valid_size]
 
+    X_train = pd.DataFrame(X_train)
+    X_test = pd.DataFrame(X_test)
     return dict(
-        X_train=X_train[train_idx], y_train=y_train[train_idx],
-        X_valid=X_train[valid_idx], y_valid=y_train[valid_idx],
+        X_train=X_train.iloc[train_idx], y_train=y_train[train_idx],
+        X_valid=X_train.iloc[valid_idx], y_valid=y_train[valid_idx],
         X_test=X_test, y_test=y_test,
+        problem='classification',
     )
 
 
-def fetch_MICROSOFT(path):
-    train_path = os.path.join(path, 'msrank_train.tsv')
-    test_path = os.path.join(path, 'msrank_test.tsv')
-    if not all(os.path.exists(fname) for fname in (train_path, test_path)):
+def fetch_MICROSOFT(path='./data/', fold=0):
+    path = pjoin(path, 'MICROSOFT')
+
+    train_path = pjoin(path, 'msrank_train.tsv')
+    test_path = pjoin(path, 'msrank_test.tsv')
+    if not all(pexists(fname) for fname in (train_path, test_path)):
         os.makedirs(path, exist_ok=True)
         download("https://www.dropbox.com/s/izpty5feug57kqn/msrank_train.tsv?dl=1", train_path)
         download("https://www.dropbox.com/s/tlsmm9a6krv0215/msrank_test.tsv?dl=1", test_path)
@@ -345,35 +430,38 @@ def fetch_MICROSOFT(path):
     data_train = pd.read_csv(train_path, header=None, skiprows=1, sep='\t')
     data_test = pd.read_csv(test_path, header=None, skiprows=1, sep='\t')
 
-    train_idx_path = os.path.join(path, 'train_idx.txt')
-    valid_idx_path = os.path.join(path, 'valid_idx.txt')
-    if not all(os.path.exists(fname) for fname in (train_idx_path, valid_idx_path)):
+    train_idx_path = pjoin(path, 'train_idx.txt')
+    valid_idx_path = pjoin(path, 'valid_idx.txt')
+    if not all(pexists(fname) for fname in (train_idx_path, valid_idx_path)):
         download("https://www.dropbox.com/s/pba6dyibyogep46/train_idx.txt?dl=1", train_idx_path)
         download("https://www.dropbox.com/s/yednqu9edgdd2l1/valid_idx.txt?dl=1", valid_idx_path)
     train_idx = pd.read_csv(train_idx_path, header=None)[0].values
     valid_idx = pd.read_csv(valid_idx_path, header=None)[0].values
 
-    X_train, y_train, query_train = data_train.iloc[train_idx, 2:].values, data_train.iloc[train_idx, 0].values, data_train.iloc[train_idx, 1].values
-    X_valid, y_valid, query_valid = data_train.iloc[valid_idx, 2:].values, data_train.iloc[valid_idx, 0].values, data_train.iloc[valid_idx, 1].values
-    X_test, y_test, query_test = data_test.iloc[:, 2:].values, data_test.iloc[:, 0].values, data_test.iloc[:, 1].values
+    X_train, y_train, query_train = data_train.iloc[train_idx, 2:], data_train.iloc[train_idx, 0].values, data_train.iloc[train_idx, 1]
+    X_valid, y_valid, query_valid = data_train.iloc[valid_idx, 2:], data_train.iloc[valid_idx, 0].values, data_train.iloc[valid_idx, 1]
+    X_test, y_test, query_test = data_test.iloc[:, 2:], data_test.iloc[:, 0].values, data_test.iloc[:, 1]
 
     return dict(
         X_train=X_train.astype(np.float32), y_train=y_train.astype(np.int64), query_train=query_train,
         X_valid=X_valid.astype(np.float32), y_valid=y_valid.astype(np.int64), query_valid=query_valid,
         X_test=X_test.astype(np.float32), y_test=y_test.astype(np.int64), query_test=query_test,
+        problem='regression',
     )
 
 
-def fetch_YAHOO(path):
-    train_path = os.path.join(path, 'yahoo_train.tsv')
-    valid_path = os.path.join(path, 'yahoo_valid.tsv')
-    test_path = os.path.join(path, 'yahoo_test.tsv')
-    if not all(os.path.exists(fname) for fname in (train_path, valid_path, test_path)):
+def fetch_YAHOO(path='./data/', fold=0):
+    path = pjoin(path, 'YAHOO')
+
+    train_path = pjoin(path, 'yahoo_train.tsv')
+    valid_path = pjoin(path, 'yahoo_valid.tsv')
+    test_path = pjoin(path, 'yahoo_test.tsv')
+    if not all(pexists(fname) for fname in (train_path, valid_path, test_path)):
         os.makedirs(path, exist_ok=True)
-        train_archive_path = os.path.join(path, 'yahoo_train.tsv.gz')
-        valid_archive_path = os.path.join(path, 'yahoo_valid.tsv.gz')
-        test_archive_path = os.path.join(path, 'yahoo_test.tsv.gz')
-        if not all(os.path.exists(fname) for fname in (train_archive_path, valid_archive_path, test_archive_path)):
+        train_archive_path = pjoin(path, 'yahoo_train.tsv.gz')
+        valid_archive_path = pjoin(path, 'yahoo_valid.tsv.gz')
+        test_archive_path = pjoin(path, 'yahoo_test.tsv.gz')
+        if not all(pexists(fname) for fname in (train_archive_path, valid_archive_path, test_archive_path)):
             download("https://www.dropbox.com/s/7rq3ki5vtxm6gzx/yahoo_set_1_train.gz?dl=1", train_archive_path)
             download("https://www.dropbox.com/s/3ai8rxm1v0l5sd1/yahoo_set_1_validation.gz?dl=1", valid_archive_path)
             download("https://www.dropbox.com/s/3d7tdfb1an0b6i4/yahoo_set_1_test.gz?dl=1", test_archive_path)
@@ -392,21 +480,24 @@ def fetch_YAHOO(path):
     data_valid = pd.read_csv(valid_path, header=None, skiprows=1, sep='\t')
     data_test = pd.read_csv(test_path, header=None, skiprows=1, sep='\t')
 
-    X_train, y_train, query_train = data_train.iloc[:, 2:].values, data_train.iloc[:, 0].values, data_train.iloc[:, 1].values
-    X_valid, y_valid, query_valid = data_valid.iloc[:, 2:].values, data_valid.iloc[:, 0].values, data_valid.iloc[:, 1].values
-    X_test, y_test, query_test = data_test.iloc[:, 2:].values, data_test.iloc[:, 0].values, data_test.iloc[:, 1].values
+    X_train, y_train, query_train = data_train.iloc[:, 2:], data_train.iloc[:, 0].values, data_train.iloc[:, 1]
+    X_valid, y_valid, query_valid = data_valid.iloc[:, 2:], data_valid.iloc[:, 0].values, data_valid.iloc[:, 1]
+    X_test, y_test, query_test = data_test.iloc[:, 2:], data_test.iloc[:, 0].values, data_test.iloc[:, 1]
 
     return dict(
         X_train=X_train.astype(np.float32), y_train=y_train, query_train=query_train,
         X_valid=X_valid.astype(np.float32), y_valid=y_valid, query_valid=query_valid,
         X_test=X_test.astype(np.float32), y_test=y_test, query_test=query_test,
+        problem='regression',
     )
 
 
-def fetch_CLICK(path, valid_size=100_000, validation_seed=None):
+def fetch_CLICK(path='./data/', valid_size=100_000, validation_seed=None, fold=0):
     # based on: https://www.kaggle.com/slamnz/primer-airlines-delay
-    csv_path = os.path.join(path, 'click.csv')
-    if not os.path.exists(csv_path):
+    path = pjoin(path, 'CLICK')
+
+    csv_path = pjoin(path, 'click.csv')
+    if not pexists(csv_path):
         os.makedirs(path, exist_ok=True)
         download('https://www.dropbox.com/s/w43ylgrl331svqc/click.csv?dl=1', csv_path)
 
@@ -424,25 +515,331 @@ def fetch_CLICK(path, valid_size=100_000, validation_seed=None):
     X_train, X_val, y_train, y_val = train_test_split(
         X_train, y_train, test_size=valid_size, random_state=validation_seed)
 
-    cat_encoder = LeaveOneOutEncoder()
-    cat_encoder.fit(X_train[cat_features], y_train)
-    X_train[cat_features] = cat_encoder.transform(X_train[cat_features])
-    X_val[cat_features] = cat_encoder.transform(X_val[cat_features])
-    X_test[cat_features] = cat_encoder.transform(X_test[cat_features])
     return dict(
-        X_train=X_train.values.astype('float32'), y_train=y_train,
-        X_valid=X_val.values.astype('float32'), y_valid=y_val,
-        X_test=X_test.values.astype('float32'), y_test=y_test
+        X_train=X_train, y_train=y_train,
+        X_valid=X_val, y_valid=y_val,
+        X_test=X_test, y_test=y_test,
+        problem='classification',
+        cat_features=cat_features,
+        # transformers=[cat_encoder],
+    )
+
+
+def fetch_MIMIC2(path='./data/', fold=0):
+    '''
+    '''
+    assert 0 <= fold <= 4, 'fold is only allowed btw 0 and 4, but get %d' \
+                                 % fold
+
+    data_path = pjoin(path, 'mimic2', 'mimic2.data')
+    if not pexists(data_path):
+        os.makedirs(pjoin(path, 'mimic2'), exist_ok=True)
+        download('https://docs.google.com/uc?id=1pmF0HF7LPuxzXqnJhoiiS7ll_e1dOsbb',
+                 pjoin(path, 'mimic2.zip'))
+        with ZipFile(pjoin(path, 'mimic2.zip'), 'r') as zipObj:
+            # Extract all the contents of zip file in current directory
+            zipObj.extractall(path)
+        os.remove(pjoin(path, 'mimic2.zip'))
+
+    cols = ['Age', 'GCS', 'SBP', 'HR', 'Temperature',
+            'PFratio', 'Renal', 'Urea', 'WBC', 'CO2', 'Na', 'K',
+            'Bilirubin', 'AdmissionType', 'AIDS',
+            'MetastaticCancer', 'Lymphoma', 'HospitalMortality']
+
+    table = pd.read_csv(data_path, delimiter=' ', header=None)
+    table.columns = cols
+
+    X_df = table.iloc[:, :-1]
+    y_df = table.iloc[:, -1].values.astype(np.int64)
+
+    train_idx = pd.read_csv(pjoin(path, 'mimic2', 'train%d.txt' % fold),
+                            header=None)[0].values
+    test_idx = pd.read_csv(pjoin(path, 'mimic2', 'test%d.txt' % fold),
+                           header=None)[0].values
+
+    cat_features = ['GCS', 'Temperature', 'AdmissionType', 'AIDS',
+                    'MetastaticCancer', 'Lymphoma', 'Renal']
+    for c in cat_features:
+        X_df[c] = X_df[c].astype(object)
+
+    return dict(
+        X_train=X_df.iloc[train_idx], y_train=y_df[train_idx],
+        X_test=X_df.iloc[test_idx], y_test=y_df[test_idx],
+        problem='classification',
+        cat_features=cat_features,
+        metric='negative_auc',
+    )
+
+
+def fetch_ADULT(path='./data/', fold=0):
+    '''
+    '''
+    assert 0 <= fold <= 4, 'fold is only allowed btw 0 and 4, but get %d' \
+                                 % fold
+    data_path = pjoin(path, 'adult', 'adult.data')
+    if not pexists(data_path):
+        os.makedirs(pjoin(path, 'adult'), exist_ok=True)
+        download('https://docs.google.com/uc?id=1kzx-ckH1bzTByINTGjtFPNnU5Dkb2qgx',
+                 pjoin(path, 'adult.zip'))
+        with ZipFile(pjoin(path, 'adult.zip'), 'r') as zipObj:
+            # Extract all the contents of zip file in current directory
+            zipObj.extractall(path)
+        os.remove(pjoin(path, 'adult.zip'))
+
+    cols = [
+        "Age", "WorkClass", "fnlwgt", "Education", "EducationNum",
+        "MaritalStatus", "Occupation", "Relationship", "Race", "Gender",
+        "CapitalGain", "CapitalLoss", "HoursPerWeek", "NativeCountry", "Income"
+    ]
+    table = pd.read_csv(data_path, header=None)
+    table.columns = cols
+
+    X_df = table.iloc[:, :-1]
+
+    y_df = table.iloc[:, -1]
+    # Make it as 0 or 1
+    y_df.loc[y_df == ' >50K'] = 1.
+    y_df.loc[y_df == ' <=50K'] = 0.
+    y_df = y_df.values.astype(np.int64)
+
+    train_idx = pd.read_csv(pjoin(path, 'adult', 'train%d.txt' % fold),
+                            header=None)[0].values
+    test_idx = pd.read_csv(pjoin(path, 'adult', 'test%d.txt' % fold),
+                           header=None)[0].values
+
+    cat_features = X_df.columns[X_df.dtypes == object]
+
+    return dict(
+        X_train=X_df.iloc[train_idx], y_train=y_df[train_idx],
+        X_test=X_df.iloc[test_idx], y_test=y_df[test_idx],
+        problem='classification',
+        cat_features=cat_features,
+        metric='negative_auc',
+    )
+
+
+def fetch_COMPAS(path='./data/', fold=0):
+    '''
+    '''
+    assert 0 <= fold <= 4, 'fold is only allowed btw 0 and 4, but get %d' \
+                                 % fold
+    data_path = pjoin(path, 'recid', 'recid.csv')
+    if not pexists(data_path):
+        os.makedirs(pjoin(path, 'recid'), exist_ok=True)
+        download('https://docs.google.com/uc?id=1jqkVhzHZDPqDUYwjb7v3zIVoKQNvZZgD',
+                 pjoin(path, 'recid.zip'))
+        with ZipFile(pjoin(path, 'recid.zip'), 'r') as zipObj:
+            # Extract all the contents of zip file in current directory
+            zipObj.extractall(path)
+        os.remove(pjoin(path, 'recid.zip'))
+
+    df = pd.read_csv(data_path, delimiter=',')
+    target_variables = ['two_year_recid']
+
+    X_df = df.drop(target_variables, axis=1)
+    y_df = df[target_variables[0]].values.astype(np.int64)
+
+    train_idx = pd.read_csv(pjoin(path, 'recid', 'train%d.txt' % fold),
+                            header=None)[0].values
+    test_idx = pd.read_csv(pjoin(path, 'recid', 'test%d.txt' % fold),
+                           header=None)[0].values
+
+    cat_features = X_df.columns[X_df.dtypes == object]
+
+    return dict(
+        X_train=X_df.iloc[train_idx], y_train=y_df[train_idx],
+        X_test=X_df.iloc[test_idx], y_test=y_df[test_idx],
+        problem='classification',
+        cat_features=cat_features,
+        metric='negative_auc',
+    )
+
+
+def fetch_CHURN(path='./data/', fold=0):
+    '''
+    '''
+    assert 0 <= fold <= 4, 'fold is only allowed btw 0 and 4, but get %d' \
+                                 % fold
+    data_path = pjoin(path, 'churn', 'WA_Fn-UseC_-Telco-Customer-Churn.csv')
+    if not pexists(data_path):
+        os.makedirs(pjoin(path, 'churn'), exist_ok=True)
+        download('https://docs.google.com/uc?id=1eZnuF2NZ4RgfMEXWuqfgp_Q1UlVQfO20',
+                 pjoin(path, 'churn.zip'))
+        with ZipFile(pjoin(path, 'churn.zip'), 'r') as zipObj:
+            # Extract all the contents of zip file in current directory
+            zipObj.extractall(path)
+        os.remove(pjoin(path, 'churn.zip'))
+
+    df = pd.read_csv(data_path)
+
+    X_df = df.iloc[:, :-1]
+    y_df = df.iloc[:, -1]
+
+    # Handle special case of TotalCharges wronly assinged as object
+    X_df['TotalCharges'][X_df['TotalCharges'] == ' '] = 0.
+    X_df.loc[:, 'TotalCharges'] = pd.to_numeric(X_df['TotalCharges'])
+
+    # Make it as 0 or 1
+    y_df[y_df == 'Yes'] = 1.
+    y_df[y_df == 'No'] = 0.
+    y_df = y_df.values.astype(np.int64)
+
+    train_idx = pd.read_csv(pjoin(path, 'churn', 'train%d.txt' % fold),
+                            header=None)[0].values
+    test_idx = pd.read_csv(pjoin(path, 'churn', 'test%d.txt' % fold),
+                           header=None)[0].values
+
+    cat_features = X_df.columns[X_df.dtypes == object]
+    return dict(
+        X_train=X_df.iloc[train_idx], y_train=y_df[train_idx],
+        X_test=X_df.iloc[test_idx], y_test=y_df[test_idx],
+        problem='classification',
+        cat_features=cat_features,
+        metric='negative_auc',
+    )
+
+
+def fetch_CREDIT(path='./data/', fold=0):
+    assert 0 <= fold <= 4, 'fold is only allowed btw 0 and 4, but get %d' \
+                                 % fold
+    data_path = pjoin(path, 'credit', 'creditcard.csv')
+    if not pexists(data_path):
+        os.makedirs(pjoin(path, 'credit'), exist_ok=True)
+        # Since this file is large, needs to use the custom function
+        print('Downloading the file and extract....')
+        download_file_from_google_drive('1TdxRae273iTnYVQnOZzb9bmHBllcMOT6',
+                                        pjoin(path, 'credit.zip'))
+        with ZipFile(pjoin(path, 'credit.zip'), 'r') as zipObj:
+            # Extract all the contents of zip file in current directory
+            zipObj.extractall(path)
+        os.remove(pjoin(path, 'credit.zip'))
+
+    df = pd.read_csv(data_path)
+
+    X_df = df.iloc[:, :-1]
+    y_df = df.iloc[:, -1]
+    y_df = y_df.values.astype(np.int64)
+
+    train_idx = pd.read_csv(pjoin(path, 'credit', 'train%d.txt' % fold),
+                            header=None)[0].values
+    test_idx = pd.read_csv(pjoin(path, 'credit', 'test%d.txt' % fold),
+                           header=None)[0].values
+    return dict(
+        X_train=X_df.iloc[train_idx], y_train=y_df[train_idx],
+        X_test=X_df.iloc[test_idx], y_test=y_df[test_idx],
+        problem='classification',
+        metric='negative_auc',
+    )
+
+
+def fetch_SUPPORT2(path='./data/', fold=0):
+    assert 0 <= fold <= 4, 'fold is only allowed btw 0 and 4, but get %d' \
+                                 % fold
+    data_path = pjoin(path, 'support2', 'support2.csv')
+    if not pexists(data_path):
+        os.makedirs(pjoin(path, 'support2'), exist_ok=True)
+        download('https://docs.google.com/uc?id=10J1xl6ii3dZS-RZ9AIX2z0l5C4rsKLn-',
+                 pjoin(path, 'support2.zip'))
+        with ZipFile(pjoin(path, 'support2.zip'), 'r') as zipObj:
+            # Extract all the contents of zip file in current directory
+            zipObj.extractall(path)
+        os.remove(pjoin(path, 'support2.zip'))
+
+    df = pd.read_csv(data_path)
+
+    cat_cols = ['sex', 'dzclass', 'race', 'ca', 'income']
+    target_variables = ['hospdead']
+    remove_features = ['death', 'slos', 'd.time', 'dzgroup', 'charges', 'totcst',
+                       'totmcst', 'aps', 'sps', 'surv2m', 'surv6m', 'prg2m', 'prg6m',
+                       'dnr', 'dnrday', 'avtisst', 'sfdm2']
+
+    df = df.drop(remove_features, axis=1)
+
+    rest_colmns = [c for c in df.columns if c not in (cat_cols + target_variables)]
+    # Impute the missing values for 0.
+    df[rest_colmns] = df[rest_colmns].fillna(0.)
+
+    df['income'][df['income'].isna()] = 'NaN'
+    df['income'][df['income'] == 'under $11k'] = ' <$11k'
+    df['race'][df['race'].isna()] = 'NaN'
+
+    X_df = df.drop(target_variables, axis=1)
+    y_df = df[target_variables[0]].values.astype(np.int64)
+
+    train_idx = pd.read_csv(pjoin(path, 'support2', 'train%d.txt' % fold),
+                            header=None)[0].values
+    test_idx = pd.read_csv(pjoin(path, 'support2', 'test%d.txt' % fold),
+                           header=None)[0].values
+    return dict(
+        X_train=X_df.iloc[train_idx], y_train=y_df[train_idx],
+        X_test=X_df.iloc[test_idx], y_test=y_df[test_idx],
+        cat_features=cat_cols,
+        problem='classification',
+        metric='negative_auc',
+    )
+
+
+def fetch_MIMIC3(path='./data/', fold=0):
+    'https://drive.google.com/file/d//view?usp=sharing'
+    assert 0 <= fold <= 4, 'fold is only allowed btw 0 and 4, but get %d' % fold
+    data_path = pjoin(path, 'mimic3', 'adult_icu.gz')
+    if not pexists(data_path):
+        os.makedirs(pjoin(path, 'mimic3'), exist_ok=True)
+        download('https://docs.google.com/uc?id=16c0VTnZxw1xwzMzx2jwEClPBNeW_fc8-',
+                 pjoin(path, 'mimic3.zip'))
+        with ZipFile(pjoin(path, 'mimic3.zip'), 'r') as zipObj:
+            # Extract all the contents of zip file in current directory
+            zipObj.extractall(path)
+        os.remove(pjoin(path, 'mimic3.zip'))
+
+    df = pd.read_csv(data_path, compression='gzip')
+
+    train_cols = [
+        'age', 'first_hosp_stay', 'first_icu_stay', 'adult_icu', 'eth_asian',
+        'eth_black', 'eth_hispanic', 'eth_other', 'eth_white',
+        'admType_ELECTIVE', 'admType_EMERGENCY', 'admType_NEWBORN',
+        'admType_URGENT', 'heartrate_min', 'heartrate_max', 'heartrate_mean',
+        'sysbp_min', 'sysbp_max', 'sysbp_mean', 'diasbp_min', 'diasbp_max',
+        'diasbp_mean', 'meanbp_min', 'meanbp_max', 'meanbp_mean',
+        'resprate_min', 'resprate_max', 'resprate_mean', 'tempc_min',
+        'tempc_max', 'tempc_mean', 'spo2_min', 'spo2_max', 'spo2_mean',
+        'glucose_min', 'glucose_max', 'glucose_mean', 'aniongap', 'albumin',
+        'bicarbonate', 'bilirubin', 'creatinine', 'chloride', 'glucose',
+        'hematocrit', 'hemoglobin', 'lactate', 'magnesium', 'phosphate',
+        'platelet', 'potassium', 'ptt', 'inr', 'pt', 'sodium', 'bun', 'wbc']
+
+    label = 'mort_icu'
+
+    X_df = df[train_cols]
+    y_df = df[label].values.astype(np.int64)
+
+    train_idx = pd.read_csv(pjoin(path, 'mimic3', 'train%d.txt' % fold),
+                            header=None)[0].values
+    test_idx = pd.read_csv(pjoin(path, 'mimic3', 'test%d.txt' % fold),
+                           header=None)[0].values
+    return dict(
+        X_train=X_df.iloc[train_idx], y_train=y_df[train_idx],
+        X_test=X_df.iloc[test_idx], y_test=y_df[test_idx],
+        problem='classification',
+        metric='negative_auc',
     )
 
 
 DATASETS = {
     'A9A': fetch_A9A,
     'EPSILON': fetch_EPSILON,
-    'PROTEIN': fetch_PROTEIN,
+    'PROTEIN': fetch_PROTEIN, # multi-class
     'YEAR': fetch_YEAR,
     'HIGGS': fetch_HIGGS,
     'MICROSOFT': fetch_MICROSOFT,
     'YAHOO': fetch_YAHOO,
     'CLICK': fetch_CLICK,
+    # The rest are GAMs datasets
+    'MIMIC2': fetch_MIMIC2,
+    'COMPAS': fetch_COMPAS,
+    'ADULT': fetch_ADULT,
+    'CHURN': fetch_CHURN,
+    'CREDIT': fetch_CREDIT,
+    'SUPPORT2': fetch_SUPPORT2,
+    'MIMIC3': fetch_MIMIC3,
 }

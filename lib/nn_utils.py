@@ -187,6 +187,70 @@ entmax15 = lambda input, dim=-1: Entmax15Function.apply(input, dim)
 entmoid15 = Entmoid15.apply
 
 
+def my_one_hot(val, dim=-1):
+    ''' Make one hot along certain dimension '''
+    max_cls = torch.argmax(val, dim=dim)
+    onehot = F.one_hot(max_cls, num_classes=val.shape[dim])
+
+    # swap back the dimension
+    if dim != -1 and dim != val.ndim - 1:
+        the_dim = list(range(onehot.ndim))
+        the_dim.insert(dim, the_dim.pop(-1))
+        onehot = onehot.permute(the_dim)
+
+    return onehot
+
+
+class _Temp(nn.Module):
+    '''
+    Shared base class for both Softmax and Gumbel
+    '''
+    def __init__(self, max_temp=1., min_temp=0.01, steps=10_000):
+        '''
+        Annealing temperature from max to min in log10 space
+        '''
+        super().__init__()
+        self.min_temp = min_temp
+        self.max_temp = max_temp
+        self.steps = steps
+
+        self.all_temps = np.logspace(np.log10(min_temp), np.log10(max_temp), steps)[::-1]
+        self.tau = max_temp
+
+    def forward(self, logits, dim=-1):
+        # During training and under annealing, then run softly
+        if self.training and self.tau > self.min_temp:
+            return self.forward_with_tau(logits, dim=dim)
+
+        # In test time, sample hardly
+        with torch.no_grad():
+            return my_one_hot(logits, dim=dim).float()
+
+    def temp_step_callback(self, step):
+        self.tau = self.min_temp if step >= self.steps else self.all_temps[step]
+
+    def forward_with_tau(self, logits, dim):
+        raise NotImplementedError()
+
+
+class SMTemp(_Temp):
+    ''' Softmax with temperature scaling '''
+    def forward_with_tau(self, logits, dim):
+        return F.softmax(logits / self.tau, dim=dim)
+
+
+class GSMTemp(_Temp):
+    ''' Gumbel Softmax with temperature scaling '''
+    def forward_with_tau(self, logits, dim):
+        return F.gumbel_softmax(logits, tau=self.tau, dim=dim)
+
+
+class EM15Temp(_Temp):
+    ''' EntMax15 with temperature scaling '''
+    def forward_with_tau(self, logits, dim):
+        return entmax15(logits / self.tau, dim=dim)
+
+
 class Lambda(nn.Module):
     def __init__(self, func):
         super().__init__()

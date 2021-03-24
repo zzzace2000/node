@@ -11,4 +11,5 @@ pandas
 prefetch_generator
 requests
 category_encoders
+filelock
 https://github.com/facebookresearch/qhoptim/archive/master.zip

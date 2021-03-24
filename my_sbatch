@@ -1,0 +1,68 @@
+#!/usr/bin/env python
+
+import os, argparse, platform
+
+os.makedirs('./logs/slrun/', exist_ok=True)
+
+parser = argparse.ArgumentParser()
+
+# adds only a small portion of the trainer's flag
+parser.add_argument('--name', type=str, required=True)
+parser.add_argument('--gpus', type=int, default=1)
+parser.add_argument('--mem', type=int, default=16)
+parser.add_argument('-p', '--partition', type=str, default=None)
+parser.add_argument('--cpu', type=int, default=8)
+parser.add_argument('--qos', type=str, default='normal')
+
+args, unknownargs = parser.parse_known_args()
+
+if args.partition is None:
+    # If in vaugan, use t4v2 (the preemption one), else (q) use gpu
+    if platform.node() in ['q.vector.local', 'm']:
+        args.partition = 'gpu'
+    elif platform.node() in ['v', 'vremote']:
+        args.partition = 't4v2'
+    else:
+        raise NotImplementedError()
+
+# Now only supports nopreemption qos in cpu
+if args.partition == 'cpu':
+    args.qos = 'nopreemption'
+
+
+temp_file = './tmp_sbatch_file.sh'
+
+# #SBATCH —exclude=gpu070
+with open(temp_file, 'w') as fh:
+    fh.write(f"""#!/usr/bin/env bash
+
+## SLURM SUBMIT SCRIPT
+#SBATCH --nodes=1
+
+#SBATCH --mail-user=zzzace2000@gmail.com
+#SBATCH --mail-type=FAIL
+
+#SBATCH -p {args.partition}
+#SBATCH --gres=gpu:{args.gpus}
+#SBATCH --mem={args.mem}G
+#SBATCH --time=7-00:00:00
+#SBATCH --job-name={args.name}
+#SBATCH --output=logs/slrun/{args.name}
+#SBATCH --cpus-per-task={args.cpu}
+#SBATCH --qos={args.qos}
+{'#SBATCH --account=deadline' if args.qos == 'deadline' else ''}
+
+source /h/kingsley/.bashrc
+
+conda activate cu101
+
+# -------------------------
+# debugging flags (optional)
+export NCCL_DEBUG=INFO
+export PYTHONFAULTHANDLER=1
+
+{" ".join(unknownargs)} --name {args.name}
+    """)
+
+os.system("sbatch %s" % temp_file)
+os.remove(temp_file)
