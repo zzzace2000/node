@@ -1,3 +1,9 @@
+# My own
+mimic_data_processing/
+inverse_rl/
+writing/
+results/
+
 # node and NPM
 npm-debug.log
 node_modules

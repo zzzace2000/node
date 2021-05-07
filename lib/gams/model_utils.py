@@ -144,6 +144,8 @@ def get_xgb_model(model_name, problem, random_state=1377, **kwargs):
             params['min_child_weight'] = float(param_str[2:])
         elif param_str.startswith('lr'):
             params['learning_rate'] = float(param_str[2:])
+        elif param_str.startswith('nj'):
+            bag_params['n_jobs'] = int(param_str[2:])
         else:
             raise NotImplementedError('the param_str is not in the supported format %s'
                                       % param_str)

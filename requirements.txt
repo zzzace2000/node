@@ -13,3 +13,4 @@ requests
 category_encoders
 filelock
 https://github.com/facebookresearch/qhoptim/archive/master.zip
+mat4py

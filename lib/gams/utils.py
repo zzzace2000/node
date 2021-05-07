@@ -200,11 +200,11 @@ def extract_GAM(X, predict_fn, predict_type='binary_logodds', max_n_bins=None):
         X = bin_data(X, max_n_bins=max_n_bins)
 
     X_values_counts = get_X_values_counts(X)
-    feature_names = list(X_values_counts.keys())
+    keys = list(X_values_counts.keys())
 
     # Use the X_values_counts to produce the Xs
     log_odds = {'offset': {'y_val': 0.}}
-    for feat_name in feature_names:
+    for feat_name in keys:
         all_xs = list(X_values_counts[feat_name].keys())
 
         log_odds[feat_name] = {
@@ -213,14 +213,14 @@ def extract_GAM(X, predict_fn, predict_type='binary_logodds', max_n_bins=None):
         }
 
     # Extract the GAM value from the model
-    split_lens = [len(log_odds[f_name]['x_val']) for f_name in feature_names]
+    split_lens = [len(log_odds[f_name]['x_val']) for f_name in keys]
     cum_lens = np.cumsum(split_lens)
 
     first_record = X.iloc[0].values
     all_X = first_record.reshape((1, -1)).repeat(1 + np.sum(split_lens), axis=0)
 
     for f_idx, (feature_name, s_idx, e_idx) in enumerate(
-            zip(feature_names, [0] + cum_lens[:-1].tolist(), cum_lens)):
+            zip(keys, [0] + cum_lens[:-1].tolist(), cum_lens)):
         x = log_odds[feature_name]['x_val']
 
         all_X[(1 + s_idx):(1 + e_idx), f_idx] = x
@@ -240,11 +240,11 @@ def extract_GAM(X, predict_fn, predict_type='binary_logodds', max_n_bins=None):
     score[1:] -= score[0]
 
     ys = np.split(score[1:], np.cumsum(split_lens[:-1]))
-    for f_idx, feature_name in enumerate(feature_names):
+    for f_idx, feature_name in enumerate(keys):
         log_odds[feature_name]['y_val'] = ys[f_idx]
 
     # Centering and importances
-    for feat_idx, feat_name in enumerate(feature_names):
+    for feat_idx, feat_name in enumerate(keys):
         v = log_odds[feat_name]
 
         model_y_val = v['y_val']
@@ -267,14 +267,141 @@ def extract_GAM(X, predict_fn, predict_type='binary_logodds', max_n_bins=None):
         'importance': -1,
     }]
 
-    for feat_idx, feat_name in enumerate(feature_names):
+    for feat_idx, feat_name in enumerate(X.columns):
         results.append({
             'feat_name': feat_name,
             'feat_idx': feat_idx,
-            'x': log_odds[feat_name]['x_val'],
-            'y': np.array(log_odds[feat_name]['y_val']),
-            'importance': log_odds[feat_name]['importance'],
+            'x': log_odds[feat_idx]['x_val'],
+            'y': np.array(log_odds[feat_idx]['y_val']),
+            'importance': log_odds[feat_idx]['importance'],
         })
 
     return pd.DataFrame(results)
 
+
+# def extract_GA2M(X, predict_fn, main_df, interactions,
+#                  predict_type='binary_logodds', max_n_bins=None):
+#     '''
+#     X: input 2d array
+#     predict_fn: the model prediction function
+#     main_df: the df for main effects
+#     interactions: a list of interaction term. E.g. [[0, 1], [0, 2]]
+#     predict_type: choose from ["binary_logodds", "binary_prob", "regression"]
+#         This corresponds to which predict_fn to pass in.
+#     max_n_bins: default set as None (No binning). It bins the value into
+#         this number of buckets to reduce the resulting GAM graph clutterness.
+#         Should set large enough to not change prediction too much.
+#     '''
+#     assert isinstance(X, pd.DataFrame)
+#
+#     if max_n_bins is not None:
+#         X = bin_data(X, max_n_bins=max_n_bins)
+#
+#     # counts
+#     X_value_counts, feat_idxes, feature_names = {}, [], []
+#     for i in interactions:
+#         name = '*'.join([X.columns[j] for j in i])
+#         X_value_counts[tuple(i)] = \
+#             X.iloc[:, i].value_counts().to_dict()
+#         feat_idxes.append(tuple(i))
+#         feature_names.append(name)
+#
+#     # Use the X_values_counts to produce the Xs
+#     log_odds = {'offset': {'y_val': 0.}}
+#     for feat_idx in feat_idxes:
+#         all_xs = list(X_value_counts[feat_idx].keys())
+#
+#         log_odds[feat_idx] = {
+#             'x_val': np.array(all_xs),
+#             'y_val': np.zeros(len(all_xs), dtype=np.float32),
+#         }
+#
+#     # Extract the GAM value from the model
+#     split_lens = [len(log_odds[feat_idx]['x_val']) for feat_idx in feat_idxes]
+#     cum_lens = np.cumsum(split_lens)
+#
+#     first_record = X.iloc[0].values
+#     all_X = first_record.reshape((1, -1)).repeat(1 + np.sum(split_lens), axis=0)
+#
+#     for fidx, s_idx, e_idx in \
+#             zip(feat_idxes, [0] + cum_lens[:-1].tolist(), cum_lens):
+#         # fidx = feat_idx.split('*')
+#         fvs = log_odds[fidx]['x_val']
+#         for i, fv in enumerate(fvs):
+#             for idx, v in zip(fidx, fv):
+#                 all_X[(s_idx+1+i), int(idx)] = v
+#
+#     if predict_type in ['binary_logodds', 'regression']:
+#         score = predict_fn(all_X)
+#     elif predict_type == 'binary_prob':
+#         eps = 1e-8
+#         prob = predict_fn(all_X)
+#
+#         prob = np.clip(prob, eps, 1. - eps)
+#         score = np.log(prob) - np.log(1. - prob)
+#     else:
+#         raise NotImplementedError(f'Unknoen {predict_type}')
+#
+#     log_odds['offset']['y_val'] = score[0]
+#     score[1:] -= score[0]
+#
+#     ys = np.split(score[1:], np.cumsum(split_lens[:-1]))
+#     for f_idx, feat_idx in enumerate(feat_idxes):
+#         log_odds[feat_idx]['y_val'] = ys[f_idx]
+#
+#     # Centering and importances
+#     for feat_idx in feat_idxes:
+#         v = log_odds[feat_idx]
+#
+#         model_y_val = v['y_val']
+#
+#         # Calculate importance
+#         weights = np.array(list(X_value_counts[feat_idx].values()))
+#         weighted_mean = np.average(model_y_val, weights=weights)
+#         importance = np.average(np.abs(model_y_val - weighted_mean), weights=weights)
+#         log_odds[feat_idx]['importance'] = importance
+#
+#         # Centering
+#         log_odds[feat_idx]['y_val'] -= weighted_mean
+#         log_odds['offset']['y_val'] += weighted_mean
+#
+#         # Record weights/counts
+#         log_odds[feat_idx]['counts'] = weights
+#
+#     results = [{
+#         'feat_name': 'offset',
+#         'feat_idx': -1,
+#         'x': None,
+#         'y': np.full(1, log_odds['offset']['y_val']),
+#         'importance': -1,
+#         'counts': None,
+#     }]
+#
+#     for feat_idx, feat_name in zip(feat_idxes, feature_names):
+#         results.append({
+#             'feat_name': feat_name,
+#             'feat_idx': feat_idx,
+#             'x': log_odds[feat_idx]['x_val'],
+#             'y': np.array(log_odds[feat_idx]['y_val']),
+#             'importance': log_odds[feat_idx]['importance'],
+#             'counts': log_odds[feat_idx]['counts'],
+#         })
+#
+#     return pd.DataFrame(results)
+
+
+# def predict_score_by_ga2m_df(ga2m_df, X):
+#     # scores = np.empty((X.shape[0], ga2m_df.shape[0]))
+#     scores = np.zeros(X.shape[0])
+#
+#     for f_idx in range(ga2m_df.shape[0]):
+#         attrs = ga2m_df.iloc[f_idx]
+#         score_lookup = pd.Series(attrs.y, index=attrs.x.astype('str'))
+#
+#         trunc_X = X.iloc[:, list(attrs.feat_idx)].astype(str)
+#         X_tuples = list(trunc_X.itertuples(index=False, name=None))
+#         # scores[:, f_idx] = score_lookup[X_tuples].values
+#         scores += score_lookup[X_tuples].values
+#
+#     # return pd.DataFrame(scores, columns=ga2m_df.feat_name.values)
+#     return scores

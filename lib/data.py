@@ -24,7 +24,7 @@ class MyPreprocessor:
 
     def __init__(self, random_state=1377, cat_features=None, normalize=False,
                  y_normalize=False, quantile_transform=False,
-                 output_distribution='normal',
+                 output_distribution='normal', n_quantiles=1000,
                  quantile_noise=0, **kwargs):
         """
         Preprocessor is a dataclass that contains all training and evaluation data required for an experiment
@@ -50,6 +50,7 @@ class MyPreprocessor:
         self.quantile_transform = quantile_transform
         self.output_distribution = output_distribution
         self.quantile_noise = quantile_noise
+        self.n_quantiles = n_quantiles
 
         self.transformers = []
         self.y_mu, self.y_std = None, None
@@ -81,6 +82,7 @@ class MyPreprocessor:
                 quantile_train += noise_std * r.randn(*quantile_train.shape)
 
             qt = QuantileTransformer(random_state=self.random_state,
+                                     n_quantiles=self.n_quantiles,
                                      output_distribution=self.output_distribution,
                                      copy=False)
             # if self.cat_features is not None:
@@ -91,12 +93,11 @@ class MyPreprocessor:
             self.transformers.append(qt)
 
         if y is not None and self.y_normalize:
-            self.y_mu, self.y_std = y.mean(), y.std()
-            print("Normalize y. mean = %.5f, std = %.5f" % (self.y_mu, self.y_std))
-            assert self.y_std != 0, 'y_std is 0! Wrong y passed in'
+            self.y_mu, self.y_std = y.mean(axis=0), y.std(axis=0)
+            print("Normalize y. mean = {}, std = {}".format(self.y_mu, self.y_std))
 
-    def transform(self, *args):
-        assert len(args) <= 2, 'Wrong arguments in transform() with more than 2 inputs'
+    def transform(self, *args, is_train=False):
+        assert len(args) <= 2
 
         X = args[0]
         if len(self.transformers) > 0:
@@ -104,16 +105,23 @@ class MyPreprocessor:
             if isinstance(X, np.ndarray):
                 X = pd.DataFrame(X, columns=self.feature_names)
 
-            for t in self.transformers:
-                X = t.transform(X)
+            for i, t in enumerate(self.transformers):
+                # Leave one out transform when it's training set
+                if self.cat_features is not None and is_train \
+                        and i == 0 and len(args) == 2:
+                    X = t.transform(X, args[1])
+                else:
+                    X = t.transform(X)
             # The LeaveOneOutEncoder makes it as np.float64 instead of 32
             X = X.astype(np.float32)
 
-        if len(args) == 1: # self.transform(X)
+        if len(args) == 1:
             return X
 
-        # self.transform(X, y)
         y = args[1]
+        if y is None:
+            return X, None
+
         if self.y_normalize and self.y_mu is not None and self.y_std is not None:
             y = (y - self.y_mu) / self.y_std
 
@@ -355,9 +363,9 @@ def fetch_YEAR(path='./data/', train_size=None, valid_size=None, test_size=51630
     X_train = pd.DataFrame(X_train)
     X_test = pd.DataFrame(X_test)
     return dict(
-        X_train=X_train.iloc[train_idx], y_train=y_train[train_idx],
-        X_valid=X_train.iloc[valid_idx], y_valid=y_train[valid_idx],
-        X_test=X_test, y_test=y_test,
+        X_train=X_train.iloc[train_idx], y_train=y_train[train_idx].astype(np.float32),
+        X_valid=X_train.iloc[valid_idx], y_valid=y_train[valid_idx].astype(np.float32),
+        X_test=X_test, y_test=y_test.astype(np.float32),
         problem='regression',
     )
 
@@ -443,9 +451,9 @@ def fetch_MICROSOFT(path='./data/', fold=0):
     X_test, y_test, query_test = data_test.iloc[:, 2:], data_test.iloc[:, 0].values, data_test.iloc[:, 1]
 
     return dict(
-        X_train=X_train.astype(np.float32), y_train=y_train.astype(np.int64), query_train=query_train,
-        X_valid=X_valid.astype(np.float32), y_valid=y_valid.astype(np.int64), query_valid=query_valid,
-        X_test=X_test.astype(np.float32), y_test=y_test.astype(np.int64), query_test=query_test,
+        X_train=X_train.astype(np.float32), y_train=y_train.astype(np.float32), query_train=query_train,
+        X_valid=X_valid.astype(np.float32), y_valid=y_valid.astype(np.float32), query_valid=query_valid,
+        X_test=X_test.astype(np.float32), y_test=y_test.astype(np.float32), query_test=query_test,
         problem='regression',
     )
 
@@ -485,9 +493,9 @@ def fetch_YAHOO(path='./data/', fold=0):
     X_test, y_test, query_test = data_test.iloc[:, 2:], data_test.iloc[:, 0].values, data_test.iloc[:, 1]
 
     return dict(
-        X_train=X_train.astype(np.float32), y_train=y_train, query_train=query_train,
-        X_valid=X_valid.astype(np.float32), y_valid=y_valid, query_valid=query_valid,
-        X_test=X_test.astype(np.float32), y_test=y_test, query_test=query_test,
+        X_train=X_train.astype(np.float32), y_train=y_train.astype(np.float32), query_train=query_train,
+        X_valid=X_valid.astype(np.float32), y_valid=y_valid.astype(np.float32), query_valid=query_valid,
+        X_test=X_test.astype(np.float32), y_test=y_test.astype(np.float32), query_test=query_test,
         problem='regression',
     )
 
@@ -568,6 +576,7 @@ def fetch_MIMIC2(path='./data/', fold=0):
         problem='classification',
         cat_features=cat_features,
         metric='negative_auc',
+        quantile_noise=1e-6,
     )
 
 
@@ -615,6 +624,7 @@ def fetch_ADULT(path='./data/', fold=0):
         problem='classification',
         cat_features=cat_features,
         metric='negative_auc',
+        quantile_noise=1e-3,
     )
 
 
@@ -652,6 +662,7 @@ def fetch_COMPAS(path='./data/', fold=0):
         problem='classification',
         cat_features=cat_features,
         metric='negative_auc',
+        quantile_noise=1e-5,
     )
 
 
@@ -696,6 +707,7 @@ def fetch_CHURN(path='./data/', fold=0):
         problem='classification',
         cat_features=cat_features,
         metric='negative_auc',
+        quantile_noise=1e-6,
     )
 
 
@@ -729,6 +741,7 @@ def fetch_CREDIT(path='./data/', fold=0):
         X_test=X_df.iloc[test_idx], y_test=y_df[test_idx],
         problem='classification',
         metric='negative_auc',
+        quantile_noise=1e-5,
     )
 
 
@@ -776,6 +789,7 @@ def fetch_SUPPORT2(path='./data/', fold=0):
         cat_features=cat_cols,
         problem='classification',
         metric='negative_auc',
+        quantile_noise=1e-4,
     )
 
 
@@ -822,10 +836,122 @@ def fetch_MIMIC3(path='./data/', fold=0):
         X_test=X_df.iloc[test_idx], y_test=y_df[test_idx],
         problem='classification',
         metric='negative_auc',
+        quantile_noise=1e-7,
     )
 
 
+def fetch_WINE(path='./data/', fold=0):
+    assert 0 <= fold <= 4, 'fold is only allowed btw 0 and 4, but get %d' % fold
+
+    data_path = pjoin(path, 'wine', 'winequality-white.csv')
+    if not pexists(data_path):
+        os.makedirs(pjoin(path, 'wine'), exist_ok=True)
+        download('https://docs.google.com/uc?id=1BV2xG1JzBCo6OjchUSzxJO877zILj4oZ',
+                 pjoin(path, 'wine.zip'))
+        with ZipFile(pjoin(path, 'wine.zip'), 'r') as zipObj:
+            # Extract all the contents of zip file in current directory
+            zipObj.extractall(path)
+        os.remove(pjoin(path, 'wine.zip'))
+
+    df = pd.read_csv(data_path, delimiter=';')
+
+    y_df = df['quality'].values.astype(np.float32)
+    X_df = df.drop(['quality'], axis=1)
+
+    train_idx = pd.read_csv(pjoin(path, 'wine', 'train%d.txt' % fold),
+                            header=None)[0].values
+    test_idx = pd.read_csv(pjoin(path, 'wine', 'test%d.txt' % fold),
+                           header=None)[0].values
+    return dict(
+        X_train=X_df.iloc[train_idx], y_train=y_df[train_idx],
+        X_test=X_df.iloc[test_idx], y_test=y_df[test_idx],
+        problem='regression',
+        quantile_noise=1e-8,
+    )
+
+
+def fetch_ROSSMANN(path='./data/', fold=0):
+    train_path = pjoin(path, 'rossmann-store-sales-preprocessed', 'train')
+    if not pexists(train_path):
+        os.makedirs(pjoin(path, 'rossmann-store-sales-preprocessed'), exist_ok=True)
+        download('https://docs.google.com/uc?id=1CSI7ETLo50fksaK7Z_YxVzc7BaQNwtjw',
+                 pjoin(path, 'rossmann-store-sales-preprocessed.zip'))
+        with ZipFile(pjoin(path, 'rossmann-store-sales-preprocessed.zip'), 'r') as zipObj:
+            # Extract all the contents of zip file in current directory
+            zipObj.extractall(path)
+        os.remove(pjoin(path, 'rossmann-store-sales-preprocessed.zip'))
+
+    def load_X_y(path):
+        df = pd.read_csv(path, delimiter='\t')
+        X_df = df.drop(['Sales'], axis=1)
+        y_df = df['Sales'].values.astype(np.float32)
+        return X_df, y_df
+
+    X_train, y_train = load_X_y(train_path)
+    test_path = pjoin(path, 'rossmann-store-sales-preprocessed', 'test')
+    X_test, y_test = load_X_y(test_path)
+
+    cat_features = [
+        'Store', 'DayOfWeek', 'Open', 'Promo', 'StateHoliday', 'SchoolHoliday',
+        'StoreType', 'Assortment', 'Promo2', 'Promo2Start_Jan', 'Promo2Start_Feb',
+        'Promo2Start_Mar', 'Promo2Start_Apr', 'Promo2Start_May', 'Promo2Start_Jun',
+        'Promo2Start_Jul', 'Promo2Start_Aug', 'Promo2Start_Sept', 'Promo2Start_Oct',
+        'Promo2Start_Nov', 'Promo2Start_Dec']
+
+    return dict(
+        X_train=X_train, y_train=y_train,
+        X_test=X_test, y_test=y_test,
+        problem='regression',
+        cat_features=cat_features,
+        quantile_noise=1e-4,
+    )
+
+
+def fetch_SARCOS(path='./data/', fold=0, target_id=None):
+    assert 0 <= fold <= 4, 'fold is only allowed btw 0 and 4, but get %d' % fold
+
+    data_path = pjoin(path, 'sarcos', 'sarcos_inv.mat')
+    if not pexists(data_path):
+        os.makedirs(pjoin(path, 'sarcos'), exist_ok=True)
+        download('https://docs.google.com/uc?id=1RjCYB87f2L1vL6lx2evA2Wqtpqcb2gYj',
+                 pjoin(path, 'sarcos.zip'))
+        with ZipFile(pjoin(path, 'sarcos.zip'), 'r') as zipObj:
+            # Extract all the contents of zip file in current directory
+            zipObj.extractall(path)
+        os.remove(pjoin(path, 'sarcos.zip'))
+
+    import mat4py
+    df = pd.DataFrame(mat4py.loadmat(data_path)['sarcos_inv'])
+
+    y_df = df.iloc[:, 21:].values.astype(np.float32)
+    X_df = df.iloc[:, :21].astype(np.float32)
+
+    train_idx = pd.read_csv(pjoin(path, 'sarcos', 'train%d.txt' % fold),
+                            header=None)[0].values
+    test_idx = pd.read_csv(pjoin(path, 'sarcos', 'test%d.txt' % fold),
+                           header=None)[0].values
+    result = dict(
+        X_train=X_df.iloc[train_idx], y_train=y_df[train_idx],
+        X_test=X_df.iloc[test_idx], y_test=y_df[test_idx],
+        problem='regression',
+        metric='multiple_mse',
+        num_classes=7,
+        addi_tree_dim=-6,
+    )
+    if target_id is None:
+        return result
+
+    assert 0 <= target_id < 7, f'Only has 7 tasks! {target_id}'
+    result['y_train'] = result['y_train'][:, target_id]
+    result['y_test'] = result['y_test'][:, target_id]
+    del result['metric']
+    del result['num_classes']
+    del result['addi_tree_dim']
+    return result
+
+
 DATASETS = {
+    # NODE datasets
     'A9A': fetch_A9A,
     'EPSILON': fetch_EPSILON,
     'PROTEIN': fetch_PROTEIN, # multi-class
@@ -842,4 +968,16 @@ DATASETS = {
     'CREDIT': fetch_CREDIT,
     'SUPPORT2': fetch_SUPPORT2,
     'MIMIC3': fetch_MIMIC3,
+    # My found
+    'ROSSMANN': fetch_ROSSMANN,
+    'WINE': fetch_WINE,
+    # Multi-task regression
+    'SARCOS': fetch_SARCOS,
+    'SARCOS0': lambda *args, **kwargs: fetch_SARCOS(*args, target_id=0, **kwargs),
+    'SARCOS1': lambda *args, **kwargs: fetch_SARCOS(*args, target_id=1, **kwargs),
+    'SARCOS2': lambda *args, **kwargs: fetch_SARCOS(*args, target_id=2, **kwargs),
+    'SARCOS3': lambda *args, **kwargs: fetch_SARCOS(*args, target_id=3, **kwargs),
+    'SARCOS4': lambda *args, **kwargs: fetch_SARCOS(*args, target_id=4, **kwargs),
+    'SARCOS5': lambda *args, **kwargs: fetch_SARCOS(*args, target_id=5, **kwargs),
+    'SARCOS6': lambda *args, **kwargs: fetch_SARCOS(*args, target_id=6, **kwargs),
 }

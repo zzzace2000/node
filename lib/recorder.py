@@ -1,6 +1,8 @@
 import time
 from os.path import join as pjoin, exists as pexists
+import os
 import json
+import numpy as np
 
 
 class Recorder(object):
@@ -21,8 +23,6 @@ class Recorder(object):
     def save_record(self):
         with open(self.file_path, 'w') as op:
             json.dump({
-                'loss_history': self.loss_history,
-                'err_history': self.err_history,
                 'best_err': self.best_err,
                 'best_step_err': self.best_step_err,
                 'step': self.step,
@@ -30,12 +30,26 @@ class Recorder(object):
                 'run_time': self.run_time,
             }, op)
 
+        np.save(pjoin(self.path, 'loss_history.npy'), self.loss_history)
+        np.save(pjoin(self.path, 'err_history.npy'), self.err_history)
+
     def load_record(self):
         with open(self.file_path) as fp:
             record = json.load(fp)
 
-        self.loss_history, self.err_history = \
-            record['loss_history'], record['err_history']
+        if 'loss_history' in record:
+            self.loss_history, self.err_history = \
+                record['loss_history'], record['err_history']
+        elif pexists(pjoin(self.path, 'loss_history.npy')):
+            try:
+                self.loss_history = np.load(pjoin(self.path, 'loss_history.npy')).tolist()
+                self.err_history = np.load(pjoin(self.path, 'err_history.npy')).tolist()
+            except ValueError as e:
+                print(e)
+                print('Encounter problem when loading. Set it to None!')
+                self.loss_history = None
+                self.err_history = None
+
         self.best_err = record['best_err']
         self.best_step_err = record['best_step_err']
         self.step = record['step']
@@ -43,3 +57,9 @@ class Recorder(object):
             self.lr_decay_step = record['lr_decay_step']
         if 'run_time' in record:
             self.run_time = record['run_time']
+
+    def clear(self):
+        if pexists(pjoin(self.path, 'loss_history.npy')):
+            os.remove(pjoin(self.path, 'loss_history.npy'))
+        if pexists(pjoin(self.path, 'err_history.npy')):
+            os.remove(pjoin(self.path, 'err_history.npy'))

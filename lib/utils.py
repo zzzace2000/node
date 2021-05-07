@@ -53,7 +53,8 @@ def iterate_minibatches(*tensors, batch_size, shuffle=True, epochs=1,
             np.random.shuffle(indices)
         for batch_start in callback(range(0, upper_bound, batch_size)):
             batch_ix = indices[batch_start: batch_start + batch_size]
-            batch = [tensor[batch_ix] for tensor in tensors]
+            batch = [tensor[batch_ix] if tensor is not None else None
+                     for tensor in tensors]
             yield batch if len(tensors) > 1 else batch[0]
         epoch += 1
         if epoch >= epochs:
@@ -225,16 +226,41 @@ class Timer:
         print('Finish "{}" in {}'.format(self.name, time_str))
 
 
-def extract_GAM_from_saved_dir(saved_dir, max_n_bins=256):
-    if not pexists(saved_dir):
+def load_best_model_from_trained_dir(the_dir):
+    ''' Follow the model architecture in main.py '''
+    if not pexists(the_dir):
         with Timer('copying from v'):
-            cmd = 'rsync -avzL v:/h/kingsley/node/%s ./logs/' % saved_dir
+            cmd = 'rsync -avzL v:/h/kingsley/node/%s ./%s' % (the_dir, the_dir)
+            print(cmd)
+            os.system(cmd)
+
+    hparams = load_hparams(the_dir)
+
+    from . import arch
+    model = getattr(arch, hparams['arch'] + 'Block').load_model_by_hparams(hparams)
+
+    best_ckpt = pjoin(the_dir, 'checkpoint_{}.pth'.format('best'))
+    if not pexists(best_ckpt):
+        print('NO BEST CHECKPT EXISTS in {}!'.format(best_ckpt))
+        return None
+
+    tmp = torch.load(best_ckpt, map_location='cpu')
+    model.load_state_dict(tmp['model'])
+    model.train(False)
+    return model
+
+
+def extract_GAM_from_saved_dir(saved_dir, max_n_bins=256):
+    if not pexists(saved_dir) or not pexists(pjoin(saved_dir, 'hparams.json')):
+        with Timer('copying from v'):
+            cmd = 'rsync -avzL v:/h/kingsley/node/%s/ %s' % (
+                saved_dir, saved_dir)
             print(cmd)
             os.system(cmd)
 
     assert pexists(saved_dir), 'Either path is wrong or copy fails'
 
-    hparams = json.load(open(pjoin(saved_dir, 'hparams.json')))
+    hparams = load_hparams(saved_dir)
 
     with Timer('Extracting GAMs...'):
         if 'num_trees' in hparams: # NODE model
@@ -245,13 +271,11 @@ def extract_GAM_from_saved_dir(saved_dir, max_n_bins=256):
 def extract_GAM_from_NODE(saved_dir, max_n_bins=256):
     from .trainer import Trainer
     from .data import DATASETS
-    assert pexists(pjoin(saved_dir, 'hparams.json')), \
-        'No hparams file exists: %s' % saved_dir
 
     hparams = json.load(open(pjoin(saved_dir, 'hparams.json')))
 
     assert pexists(pjoin(saved_dir, 'checkpoint_best.pth')), 'No best ckpt exists!'
-    model = Trainer.load_best_model_from_trained_dir(saved_dir)
+    model = load_best_model_from_trained_dir(saved_dir)
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     model.to(device)
     model.train(False)
@@ -276,7 +300,7 @@ def extract_GAM_from_NODE(saved_dir, max_n_bins=256):
             ret = logits[:, 1] - logits[:, 0]
         elif len(logits.shape) == 1: # regression or binary cls
             if pp.y_mu is not None and pp.y_std is not None:
-                ret = (ret * pp.y_std) + pp.mu
+                ret = (ret * pp.y_std) + pp.y_mu
         return ret
 
     df = extract_GAM(all_X, predict_fn, max_n_bins=max_n_bins)
@@ -287,7 +311,7 @@ def extract_GAM_from_baselines(saved_dir, max_n_bins=256):
     from .data import DATASETS
     model = pickle.load(open(pjoin(saved_dir, 'model.pkl'), 'rb'))
 
-    hparams = json.load(open(pjoin(saved_dir, 'hparams.json')))
+    hparams = load_hparams(saved_dir)
 
     pp = None
     if pexists(pjoin(saved_dir, 'preprocessor.pkl')):
@@ -314,6 +338,18 @@ def extract_GAM_from_baselines(saved_dir, max_n_bins=256):
     return df
 
 
+def load_hparams(the_dir):
+    if pexists(pjoin(the_dir, 'hparams.json')):
+        hparams = json.load(open(pjoin(the_dir, 'hparams.json')))
+    else:
+        name = os.path.basename(the_dir)
+        if pexists(pjoin(the_dir, 'hparams', name)):
+            hparams = json.load(open(pjoin(the_dir, 'hparams', name)))
+        else:
+            raise RuntimeError('No hparams exist: %s' % the_dir)
+    return hparams
+
+
 def average_GAMs(gam_dirs):
     all_dfs = [extract_GAM_from_saved_dir(pjoin('logs', d)) for d in gam_dirs]
 
@@ -329,6 +365,7 @@ def get_gpu_stat(pitem: str, device_id=0):
     ''' Borrow from pytorch lightning:
         https://github.com/PyTorchLightning/PyTorch-Lightning/blob/0.9.0/pytorch_lightning/callbacks/gpu_usage_logger.py#L30-L166
     '''
+    import subprocess
     result = subprocess.run(
         ["nvidia-smi", f"--query-gpu={pitem}", "--format=csv,nounits,noheader"],
         encoding="utf-8",
@@ -339,3 +376,4 @@ def get_gpu_stat(pitem: str, device_id=0):
 
     gpu_usage = [float(x) for x in result.stdout.strip().split(os.linesep)]
     return gpu_usage[device_id]
+

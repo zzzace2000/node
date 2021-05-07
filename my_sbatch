@@ -1,6 +1,9 @@
 #!/usr/bin/env python
 
 import os, argparse, platform
+import time
+from filelock import FileLock
+
 
 os.makedirs('./logs/slrun/', exist_ok=True)
 
@@ -9,9 +12,9 @@ parser = argparse.ArgumentParser()
 # adds only a small portion of the trainer's flag
 parser.add_argument('--name', type=str, required=True)
 parser.add_argument('--gpus', type=int, default=1)
-parser.add_argument('--mem', type=int, default=16)
+parser.add_argument('--mem', type=int, default=8)
 parser.add_argument('-p', '--partition', type=str, default=None)
-parser.add_argument('--cpu', type=int, default=8)
+parser.add_argument('--cpu', type=int, default=4)
 parser.add_argument('--qos', type=str, default='normal')
 
 args, unknownargs = parser.parse_known_args()
@@ -21,6 +24,7 @@ if args.partition is None:
     if platform.node() in ['q.vector.local', 'm']:
         args.partition = 'gpu'
     elif platform.node() in ['v', 'vremote']:
+    # else: #
         args.partition = 't4v2'
     else:
         raise NotImplementedError()
@@ -29,18 +33,31 @@ if args.partition is None:
 if args.partition == 'cpu':
     args.qos = 'nopreemption'
 
+# if args.qos is None and platform.node() in ['v', 'vremote']:
+#     args.qos = 'normal'
+#
+#     cmd = "sacct --user=kingsley --format='State,QOS' | grep -v 'CANCELLED\|COMPLETED' " \
+#           "| grep high | wc -l"
+#     num_high_jobs = int(os.popen(cmd).read().strip())
+#     print('num_high_jobs:', num_high_jobs)
+#     if num_high_jobs < 4:
+#         args.qos = 'high'
+
 
 temp_file = './tmp_sbatch_file.sh'
 
-# #SBATCH —exclude=gpu070
-with open(temp_file, 'w') as fh:
-    fh.write(f"""#!/usr/bin/env bash
 
+lock = FileLock(temp_file + ".lock")
+with lock:
+    # #SBATCH —exclude=gpu070
+    # #SBATCH --mail-user=zzzace2000@gmail.com
+    # #SBATCH --mail-type=FAIL
+    with open(temp_file, 'w') as fh:
+        fh.write(f"""#!/usr/bin/env bash
+    
 ## SLURM SUBMIT SCRIPT
 #SBATCH --nodes=1
-
-#SBATCH --mail-user=zzzace2000@gmail.com
-#SBATCH --mail-type=FAIL
+#SBATCH --exclude=gpu080,gpu111
 
 #SBATCH -p {args.partition}
 #SBATCH --gres=gpu:{args.gpus}
@@ -61,8 +78,8 @@ conda activate cu101
 export NCCL_DEBUG=INFO
 export PYTHONFAULTHANDLER=1
 
-{" ".join(unknownargs)} --name {args.name}
-    """)
+{" ".join(unknownargs)} --name {args.name} --cpu {args.cpu} --gpus {args.gpus} --mem {args.mem}
+        """)
 
-os.system("sbatch %s" % temp_file)
-os.remove(temp_file)
+    os.system("sbatch %s" % temp_file)
+    os.remove(temp_file)
