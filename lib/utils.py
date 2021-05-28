@@ -15,7 +15,7 @@ from os.path import join as pjoin, exists as pexists
 import json
 import pickle
 import pandas as pd
-from .gams.utils import extract_GAM
+from .gams.utils import extract_GAM, bin_data
 
 
 def download(url, filename, delete_if_interrupted=True, chunk_size=4096):
@@ -228,16 +228,23 @@ class Timer:
 
 def load_best_model_from_trained_dir(the_dir):
     ''' Follow the model architecture in main.py '''
-    if not pexists(the_dir):
+    if not pexists(pjoin(the_dir, 'MY_IS_FINISHED')):
         with Timer('copying from v'):
-            cmd = 'rsync -avzL v:/h/kingsley/node/%s ./%s' % (the_dir, the_dir)
+            cmd = 'rsync -avzL v:/h/kingsley/node/%s/ %s' % (the_dir, the_dir)
             print(cmd)
             os.system(cmd)
 
     hparams = load_hparams(the_dir)
 
     from . import arch
-    model = getattr(arch, hparams['arch'] + 'Block').load_model_by_hparams(hparams)
+    model, step_callbacks = getattr(arch, hparams['arch'] + 'Block').load_model_by_hparams(
+        hparams, ret_step_callback=True)
+
+    # Set the step!
+    if step_callbacks is not None and len(step_callbacks) > 0:
+        bstep = json.load(open(pjoin(the_dir, 'recorder.json')))['best_step_err']
+        for c in step_callbacks:
+            c(bstep)
 
     best_ckpt = pjoin(the_dir, 'checkpoint_{}.pth'.format('best'))
     if not pexists(best_ckpt):
@@ -250,7 +257,7 @@ def load_best_model_from_trained_dir(the_dir):
     return model
 
 
-def extract_GAM_from_saved_dir(saved_dir, max_n_bins=256):
+def extract_GAM_from_saved_dir(saved_dir, max_n_bins=256, **kwargs):
     if not pexists(saved_dir) or not pexists(pjoin(saved_dir, 'hparams.json')):
         with Timer('copying from v'):
             cmd = 'rsync -avzL v:/h/kingsley/node/%s/ %s' % (
@@ -262,14 +269,23 @@ def extract_GAM_from_saved_dir(saved_dir, max_n_bins=256):
 
     hparams = load_hparams(saved_dir)
 
-    with Timer('Extracting GAMs...'):
-        if 'num_trees' in hparams: # NODE model
-            return extract_GAM_from_NODE(saved_dir, max_n_bins)
-        return extract_GAM_from_baselines(saved_dir, max_n_bins)
+    if 'num_trees' in hparams: # NODE model
+        df = extract_GAM_from_NODE(saved_dir, max_n_bins, **kwargs)
+        # Wierd bug that sometimes the feat_idx gets np.int64 instead of int causing bugs
+        df.feat_idx = df.feat_idx.apply(lambda x: int(x) if (type(x) is np.int64) else x)
+        return df
+
+    return extract_GAM_from_baselines(saved_dir, max_n_bins, **kwargs)
 
 
-def extract_GAM_from_NODE(saved_dir, max_n_bins=256):
-    from .trainer import Trainer
+def extract_GAM_from_NODE(saved_dir, max_n_bins=256, way='blackbox', cache=False, **kwargs):
+    if max_n_bins is None:
+        max_n_bins = -1
+
+    cache_path = pjoin(saved_dir, f'df_cache_bins{max_n_bins}_blackbox.pkl')
+    if pexists(cache_path):
+        with open(cache_path, 'rb') as fp, Timer(f'load cache: {cache_path}'):
+            return pickle.load(fp)
     from .data import DATASETS
 
     hparams = json.load(open(pjoin(saved_dir, 'hparams.json')))
@@ -278,36 +294,78 @@ def extract_GAM_from_NODE(saved_dir, max_n_bins=256):
     model = load_best_model_from_trained_dir(saved_dir)
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     model.to(device)
-    model.train(False)
 
     pp = pickle.load(open(pjoin(saved_dir, 'preprocessor.pkl'), 'rb'))
 
     dataset = DATASETS[hparams['dataset'].upper()](path='./data/')
     all_X = pd.concat([dataset['X_train'], dataset['X_test']], axis=0)
 
-    def predict_fn(X):
-        if isinstance(X, np.ndarray):
-            X = pd.DataFrame(X, columns=all_X.columns)
+    if max_n_bins is not None and max_n_bins > 0:
+        all_X = bin_data(all_X, max_n_bins=max_n_bins)
 
-        X = pp.transform(X)
-        X = torch.as_tensor(X, device=device)
-        with torch.no_grad():
-            logits = process_in_chunks(model, X, batch_size=2*hparams['batch_size'])
-            logits = check_numpy(logits)
+    if hparams.get('ga2m', 0):
+        way = 'mine'
 
-        ret = logits
-        if len(logits.shape) == 2 and logits.shape[1] == 2:
-            ret = logits[:, 1] - logits[:, 0]
-        elif len(logits.shape) == 1: # regression or binary cls
-            if pp.y_mu is not None and pp.y_std is not None:
-                ret = (ret * pp.y_std) + pp.y_mu
-        return ret
+    if way == 'blackbox':
+        def predict_fn(X):
+            if isinstance(X, np.ndarray):
+                X = pd.DataFrame(X, columns=all_X.columns)
 
-    df = extract_GAM(all_X, predict_fn, max_n_bins=max_n_bins)
+            X = pp.transform(X)
+            X = torch.as_tensor(X, device=device)
+            with torch.no_grad():
+                logits = process_in_chunks(model, X, batch_size=2*hparams['batch_size'])
+                logits = check_numpy(logits)
+
+            ret = logits
+            if len(logits.shape) == 2 and logits.shape[1] == 2:
+                ret = logits[:, 1] - logits[:, 0]
+            elif len(logits.shape) == 1: # regression or binary cls
+                if pp.y_mu is not None and pp.y_std is not None:
+                    ret = (ret * pp.y_std) + pp.y_mu
+            return ret
+
+        df = extract_GAM(all_X, predict_fn)
+    elif way == 'mine':
+        df = model.extract_additive_terms(all_X, pp, device=device,
+                                          batch_size=2*hparams['batch_size'],
+                                          **kwargs)
+    else:
+        raise NotImplementedError('No such way: ' + way)
+
+    if cache:
+        with Timer('Dump the dataframe to cache'):
+            with open(cache_path, 'wb') as op:
+                pickle.dump(df, op)
     return df
 
 
-def extract_GAM_from_baselines(saved_dir, max_n_bins=256):
+def make_predictions(model_name, X):
+    saved_dir = pjoin('logs', model_name)
+    hparams = json.load(open(pjoin(saved_dir, 'hparams.json')))
+
+    assert pexists(pjoin(saved_dir, 'checkpoint_best.pth')), 'No best ckpt exists!'
+    model = load_best_model_from_trained_dir(saved_dir)
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    model.to(device)
+
+    pp = pickle.load(open(pjoin(saved_dir, 'preprocessor.pkl'), 'rb'))
+
+    X = pp.transform(X)
+    X = torch.as_tensor(X, device=device)
+    with torch.no_grad():
+        logits = process_in_chunks(model, X, batch_size=2 * hparams['batch_size'])
+        logits = check_numpy(logits)
+
+    ret = logits
+    if len(logits.shape) == 2 and logits.shape[1] == 2:
+        ret = logits[:, 1] - logits[:, 0]
+    elif len(logits.shape) == 1:  # regression or binary cls
+        if pp.y_mu is not None and pp.y_std is not None:
+            ret = (ret * pp.y_std) + pp.y_mu
+    return ret
+
+def extract_GAM_from_baselines(saved_dir, max_n_bins=256, **kwargs):
     from .data import DATASETS
     model = pickle.load(open(pjoin(saved_dir, 'model.pkl'), 'rb'))
 
@@ -343,22 +401,78 @@ def load_hparams(the_dir):
         hparams = json.load(open(pjoin(the_dir, 'hparams.json')))
     else:
         name = os.path.basename(the_dir)
-        if pexists(pjoin(the_dir, 'hparams', name)):
-            hparams = json.load(open(pjoin(the_dir, 'hparams', name)))
+        if not pexists(pjoin('logs', 'hparams', name)):
+            cmd = 'rsync -avzL v:/h/kingsley/node/logs/hparams/%s ./logs/hparams/' % (name)
+            print(cmd)
+            os.system(cmd)
+
+        if pexists(pjoin('logs', 'hparams', name)):
+            hparams = json.load(open(pjoin('logs', 'hparams', name)))
         else:
             raise RuntimeError('No hparams exist: %s' % the_dir)
     return hparams
 
 
-def average_GAMs(gam_dirs):
-    all_dfs = [extract_GAM_from_saved_dir(pjoin('logs', d)) for d in gam_dirs]
+def average_GAMs(gam_dirs, **kwargs):
+    all_dfs = [extract_GAM_from_saved_dir(pjoin('logs', d), **kwargs) for d in gam_dirs]
 
+    df = average_GAM_dfs(all_dfs)
+    return df
+
+
+def average_GAM_dfs(all_dfs):
     first_df = all_dfs[0]
-    all_ys = [np.concatenate(df.y) for df in all_dfs]
-    split_pts = first_df.y.apply(lambda x: len(x)).cumsum()[:-1]
-    first_df['y'] = np.split(np.mean(all_ys, axis=0), split_pts)
-    first_df['y_std'] = np.split(np.std(all_ys, axis=0), split_pts)
-    return first_df
+    if len(all_dfs) == 1:
+        return first_df
+
+    all_feat_idx = first_df.feat_idx.values.tolist()
+    for i in range(1, len(all_dfs)):
+        all_feat_idx += all_dfs[i].feat_idx.values.tolist()
+    all_feat_idx = set(all_feat_idx)
+
+    results = []
+    for feat_idx in all_feat_idx:
+        # print(feat_idx)
+        # all_dfs_with_this_feat_idx = []
+        all_dfs_with_this_feat_idx = [
+            df[df.feat_idx == feat_idx].iloc[0] for df in all_dfs
+            if np.any(df.feat_idx == feat_idx)
+        ]
+
+        all_ys = [df.y for df in all_dfs_with_this_feat_idx]
+        if len(all_ys) == 0:
+            import pdb; pdb.set_trace()
+
+        if len(all_ys) < len(all_dfs):  # Not every df has the index
+            diff = len(all_dfs) - len(all_ys)
+            # print(f'Add {diff} times 0 arr in {feat_idx}')
+            for _ in range(diff):
+                all_ys.append(np.zeros(len(all_ys[0])).tolist())
+
+        y_mean = np.mean(all_ys, axis=0)
+        y_std = np.std(all_ys, axis=0)
+
+        row = all_dfs_with_this_feat_idx[0]
+        result = {
+            'feat_name': row.feat_name,
+            'feat_idx': row.feat_idx,
+            'x': row.x,
+            'y': y_mean,
+            'y_std': y_std,
+        }
+        if 'counts' in row:
+            result['counts'] = row.counts
+            result['importance'] = np.average(np.abs(y_mean), weights=row.counts)
+
+        results.append(result)
+
+    df = pd.DataFrame(results)
+    # sort it
+    df['tmp'] = df.feat_idx.apply(
+        lambda x: x[0] * 1e10 + x[1] * 1e5 if isinstance(x, tuple) else int(x))
+    df = df.sort_values('tmp').drop('tmp', axis=1)
+    df = df.reset_index(drop=True)
+    return df
 
 
 def get_gpu_stat(pitem: str, device_id=0):

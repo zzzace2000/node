@@ -9,14 +9,14 @@ from .base import MyCommonBase, MyFitMixin
 class MyExplainableBoostingMixin(MyCommonBase):
     def __init__(self, random_state=1377, max_rounds=20000, outer_bags=1, inner_bags=0,
             n_jobs=-1, learning_rate=None, min_samples_leaf=2, binning='quantile',
-            validation_size=0.2, **kwargs):
+            validation_size=0.2, interactions=0, **kwargs):
         if learning_rate is None:
             learning_rate = 0.01 if isinstance(self, ExplainableBoostingClassifier) else 0.1
 
         super(MyExplainableBoostingMixin, self).__init__(
             random_state=random_state, max_rounds=max_rounds, outer_bags=outer_bags, n_jobs=n_jobs,
             learning_rate=learning_rate, inner_bags=inner_bags, min_samples_leaf=min_samples_leaf,
-            binning=binning, validation_size=validation_size, interactions=0, **kwargs)
+            binning=binning, validation_size=validation_size, interactions=interactions, **kwargs)
 
     def fit(self, X, y):
         result = super().fit(X, y)

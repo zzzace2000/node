@@ -1512,29 +1512,928 @@ for dset in 'higgs' 'year' 'click'; do
   done
 done
 
-
-
-
-
-### (WAIT): so select pr_ratio for these 2 datasets. Select proper lr/freeze_steps as well. And run full range by the fix pretraining ratio with send_pt0=1
+# (R 0511) Test pretrain=3? If it improves?
 arch='GAMAtt'
-pretrain='2'
-send_pt0='1'
-finetune_data_subsample='5e-5 1e-4 5e-4 1e-3 5e-3' # 0.01 0.05 0.1
-finetune_freeze_steps='0 1000'
-finetune_lr='1e-4'
-random_search='15'
-pretraining_ratio='?'
-for dset in 'year' 'microsoft' 'rossmann' 'yahoo'; do
-  python main.py --name 0508_${dset}_${arch} --dataset ${dset} --random_search ${random_search} --cpu 4 --gpus 1 --mem 8 --fp16 1 --arch ${arch} --pretrain ${pretrain} --finetune_data_subsample ${finetune_data_subsample} --send_pt0 ${send_pt0} --finetune_lr ${finetune_lr} --finetune_freeze_steps ${finetune_freeze_steps} --split_train_as_val 1 --seed 30 --pretraining_ratio ${pretraining_ratio}
+finetune_freeze_steps='500'
+finetune_lr='5e-4 1e-4'
+random_search='14'
+finetune_data_subsample='0.005 0.01'
+pretraining_ratio='0.15'
+for dset in 'mimic2'; do
+  # Normal training with 3d
+  pretrain='2'
+  send_pt0='1'
+  python main.py --name 0511_${dset}_${arch} --dataset ${dset} --random_search ${random_search} --cpu 4 --gpus 1 --mem 8 --fp16 1 --arch ${arch} --pretrain ${pretrain} --finetune_data_subsample ${finetune_data_subsample} --send_pt0 ${send_pt0} --finetune_lr ${finetune_lr} --finetune_freeze_steps ${finetune_freeze_steps} --split_train_as_val 1 --seed 30 --pretraining_ratio ${pretraining_ratio}
+  pretrain='3'
+  send_pt0='0'
+  python main.py --name 0511_${dset}_${arch} --dataset ${dset} --random_search ${random_search} --cpu 4 --gpus 1 --mem 8 --fp16 1 --arch ${arch} --pretrain ${pretrain} --finetune_data_subsample ${finetune_data_subsample} --send_pt0 ${send_pt0} --finetune_lr ${finetune_lr} --finetune_freeze_steps ${finetune_freeze_steps} --split_train_as_val 1 --seed 30 --pretraining_ratio ${pretraining_ratio}
+done
+arch='GAMAtt'
+finetune_freeze_steps='500'
+finetune_lr='5e-4 1e-4'
+random_search='10'
+finetune_data_subsample='0.005'
+pretraining_ratio='0.15'
+for dset in 'mimic3'; do
+  # Normal training with 3d
+  pretrain='2'
+  send_pt0='1'
+  python main.py --name 0511_${dset}_${arch} --dataset ${dset} --random_search ${random_search} --cpu 4 --gpus 1 --mem 8 --fp16 1 --arch ${arch} --pretrain ${pretrain} --finetune_data_subsample ${finetune_data_subsample} --send_pt0 ${send_pt0} --finetune_lr ${finetune_lr} --finetune_freeze_steps ${finetune_freeze_steps} --split_train_as_val 1 --seed 30 --pretraining_ratio ${pretraining_ratio}
+  pretrain='3'
+  send_pt0='0'
+  python main.py --name 0511_${dset}_${arch} --dataset ${dset} --random_search ${random_search} --cpu 4 --gpus 1 --mem 8 --fp16 1 --arch ${arch} --pretrain ${pretrain} --finetune_data_subsample ${finetune_data_subsample} --send_pt0 ${send_pt0} --finetune_lr ${finetune_lr} --finetune_freeze_steps ${finetune_freeze_steps} --split_train_as_val 1 --seed 30 --pretraining_ratio ${pretraining_ratio}
 done
 
 
-TODO: Do these!!!
-***(2) Tmr to see the yahoo/microsoft which is the best pretraining ratio!
-***(1) Tune the temperature of entmoid/sigmoid might change how jumpy it is?
-Can have synthetic linear, smooth and jumps to show the effect?
-***(3) Run the random search for RL!
+### O.k. since I probably know what is the best for each dataset. Change pt=3 for yahoo/
+### (R) 0512: Find the best pr ratio. Run on 5 large datasets (except epsilon)
+### Have not run 'click' 'yahoo' 'higgs'
+arch='GAMAtt'
+pretrain='3'
+send_pt0='1'
+finetune_freeze_steps='500'
+finetune_lr='5e-5 1e-4 2e-4 5e-4'
+random_search='14'
+for dset in 'year' 'microsoft'; do
+  finetune_data_subsample='2e-4 5e-4 1e-3 2e-3 5e-3'
+  if [[ "${dset}" == "higgs" ]]; then
+    finetune_data_subsample='2e-5 5e-5 1e-4 2e-4 5e-4'
+  fi
+
+  pretraining_ratio='0.15'
+  if [[ "${dset}" == "yahoo" ]]; then
+    pretraining_ratio='0.25'
+  fi
+
+  python main.py --name 0512_${dset}_${arch} --dataset ${dset} --random_search ${random_search} --cpu 4 --gpus 1 --mem 8 --fp16 1 --arch ${arch} --pretrain ${pretrain} --finetune_data_subsample ${finetune_data_subsample} --send_pt0 ${send_pt0} --finetune_lr ${finetune_lr} --finetune_freeze_steps ${finetune_freeze_steps} --split_train_as_val 1 --seed 30 --pretraining_ratio ${pretraining_ratio}
+done
+#### WIERD!!!!!!!! The result gets worse. But too many differences e.g. smaller data ratio, smaller early stopping rounds, split_train_as_val=1??
+### Rerun the rest smaller datasets and see if pt=3 improves?
+
+# 0513: run if the entmoid with smaller temperature much jumpier??
+random_search='15'
+for dset in 'mimic2' 'adult'; do
+  arch='GAMAtt'
+  for entmoid_min_temp in '1' '0.1' '0.01'; do
+    python main.py --name 0513_${dset}_${arch}_entm${entmoid_min_temp} --dataset ${dset} --random_search ${random_search} --cpu 4 --gpus 1 --mem 8 --fp16 1 --arch ${arch} --entmoid_min_temp ${entmoid_min_temp} --seed 12
+  done
+done
+
+
+
+
+# To run more data ratio, we set flag ignore_prev_runs=1
+# It might have dangers of causing two jobs runs the same config and crashes though.
+arch='GAMAtt'
+finetune_freeze_steps='500'
+finetune_lr='5e-4 3e-4 1e-4 5e-5'
+random_search='15'
+pretraining_ratio='0.15'
+#for dset in 'mimic2' 'mimic3' 'adult' 'compas' 'support2' 'credit' 'churn'; do
+for dset in 'adult' 'compas' 'support2' 'credit' 'churn'; do
+  finetune_data_subsample='0.02 0.05 0.1'
+#  finetune_data_subsample='0.005 0.01'
+  if [[ "${dset}" == "mimic3" ]]; then
+    finetune_data_subsample='0.01 0.02 0.05 0.1'
+  fi
+#  if [[ "${dset}" == "mimic2" ]]; then # These already finish
+#    finetune_data_subsample='0.02 0.05 0.1'
+#  fi
+  if [[ "${dset}" == "credit" ]]; then # Credit can not be smaller than 0.01
+#    finetune_data_subsample='0.01 0.02'
+    finetune_data_subsample='0.05 0.1 0.2'
+  fi
+  pretrain='3'
+  send_pt0='1'
+  python main.py --name 0511_${dset}_${arch} --dataset ${dset} --random_search ${random_search} --cpu 4 --gpus 1 --mem 8 --fp16 1 --arch ${arch} --pretrain ${pretrain} --finetune_data_subsample ${finetune_data_subsample} --send_pt0 ${send_pt0} --finetune_lr ${finetune_lr} --finetune_freeze_steps ${finetune_freeze_steps} --split_train_as_val 1 --seed 30 --pretraining_ratio ${pretraining_ratio} --ignore_prev_runs 1
+done
+
+
+##### Some have not finished. Rerun those jobs not finished!
+# Have not run compas, mimic3  0.01 0.02 0.05 0.1
+arch='GAMAtt'
+finetune_freeze_steps='500'
+finetune_lr='5e-4 3e-4 1e-4 5e-5'
+random_search='15'
+pretraining_ratio='0.15'
+for dset in 'mimic3' 'compas' 'credit'; do
+  if [[ "${dset}" == "mimic2" ]]; then
+    finetune_data_subsample='0.005 0.01'
+  fi
+  if [[ "${dset}" == "mimic3" ]]; then
+    finetune_data_subsample='0.01 0.02 0.05 0.1'
+  fi
+  if [[ "${dset}" == "support2" ]]; then
+    finetune_data_subsample='0.02 0.05 0.1'
+  fi
+  if [[ "${dset}" == "compas" ]]; then
+    finetune_data_subsample='0.02 0.05 0.1'
+  fi
+  if [[ "${dset}" == "credit" ]]; then # Credit can not be smaller than 0.01
+    finetune_data_subsample='0.02'
+  fi
+  if [[ "${dset}" == "churn" ]]; then
+    finetune_data_subsample='0.02 0.05 0.1'
+  fi
+  pretrain='3'
+  send_pt0='1'
+  python main.py --name 0511_${dset}_${arch} --dataset ${dset} --random_search ${random_search} --cpu 4 --gpus 1 --mem 8 --fp16 1 --arch ${arch} --pretrain ${pretrain} --finetune_data_subsample ${finetune_data_subsample} --send_pt0 ${send_pt0} --finetune_lr ${finetune_lr} --finetune_freeze_steps ${finetune_freeze_steps} --split_train_as_val 1 --seed 30 --pretraining_ratio ${pretraining_ratio} --ignore_prev_runs 1
+done
+
+
+random_search='15'
+for dset in 'mimic2' 'adult'; do
+  arch='GAMAtt'
+  for entmoid_anneal_steps in '10000' '20000'; do
+    for entmoid_min_temp in '0.1' '0.01'; do
+      python main.py --name 0513_${dset}_${arch}_entm${entmoid_min_temp}_ents${entmoid_anneal_steps} --dataset ${dset} --random_search ${random_search} --cpu 4 --gpus 1 --mem 8 --fp16 1 --arch ${arch} --entmoid_min_temp ${entmoid_min_temp} --seed 12 --entmoid_anneal_steps ${entmoid_anneal_steps}
+    done
+  done
+done
+
+
+# (R) Run the best mimic2/adult/compas with various min_temp!
+entmoid_anneal_steps='5000'
+for fold in '0' '1' '2' '3' '4'; do
+for entmoid_min_temp in '0.75' '0.5' '0.25'; do
+./my_sbatch --cpu 4 --gpus 1 --mem 8 python -u main.py --name 0513_mimic2_f${fold}_entm${entmoid_min_temp}_GAMAtt_s89_nl5_nt400_td0_d4_od0.2_ld0.3_cs0.5_lr0.01_lo0_la1e-07_pt0_pr0_mn0_ol0_ll0_da8 --load_from_hparams 0513_mimic2_GAMAtt_entm1_s89_nl5_nt400_td0_d4_od0.2_ld0.3_cs0.5_lr0.01_lo0_la1e-07_pt0_pr0_mn0_ol0_ll0_da8 --entmoid_min_temp ${entmoid_min_temp} --entmoid_anneal_steps ${entmoid_anneal_steps} --fold ${fold}
+done
+done
+# RUn the best compas?
+entmoid_anneal_steps='5000'
+for entmoid_min_temp in '0.75' '0.5' '0.25'; do
+  for fold in '0' '1' '2' '3' '4'; do
+./my_sbatch --cpu 4 --gpus 1 --mem 8 python -u main.py --name 0513_compas_f${fold}_entm${entmoid_min_temp}_GAMAtt_s67_nl5_nt800_td2_d4_od0.3_cs0.5_lr0.01_lo0_la1e-05_pt0_pr0_mn0_ol0_da16_ll1 --load_from_hparams 0502_f0_best_compas_GAMAtt2_s67_nl5_nt800_td2_d4_od0.3_cs0.5_lr0.01_lo0_la1e-05_pt0_pr0_mn0_ol0_da16_ll1 --arch GAMAtt --entmoid_min_temp ${entmoid_min_temp} --entmoid_anneal_steps ${entmoid_anneal_steps} --fold ${fold}
+  done
+done
+entmoid_anneal_steps='5000'
+for entmoid_min_temp in '0.75' '0.5' '0.25'; do
+  for fold in '0' '1' '2' '3' '4'; do
+./my_sbatch --cpu 4 --gpus 1 --mem 8 python -u main.py --name 0513_adult_f${fold}_entm${entmoid_min_temp}_GAM_lastl_s46_nl3_nt666_td1_d4_od0.1_cs0.5_lr0.01_lo0_la0.0 --load_from_hparams 0413_f0_best_adult_GAM_lastl_s46_nl3_nt666_td1_d4_od0.1_cs0.5_lr0.01_lo0_la0.0 --entmoid_min_temp ${entmoid_min_temp} --entmoid_anneal_steps ${entmoid_anneal_steps} --fold ${fold}
+  done
+done
+
+
+random_search='15'
+entmoid_anneal_steps='10'
+for dset in 'mimic2' 'adult'; do
+  arch='GAMAtt'
+  for entmoid_min_temp in '0.1' '0.01'; do
+    python main.py --name 0513_${dset}_${arch}_entm${entmoid_min_temp}_ents${entmoid_anneal_steps} --dataset ${dset} --random_search ${random_search} --cpu 4 --gpus 1 --mem 8 --fp16 1 --arch ${arch} --entmoid_min_temp ${entmoid_min_temp} --seed 12 --entmoid_anneal_steps ${entmoid_anneal_steps}
+  done
+done
+
+
+# (R) Run the random search for compas: I feel the graph is too smooth :(
+random_search='15'
+for dset in 'compas'; do
+  arch='GAMAtt'
+  entmoid_anneal_steps='10000'
+  for entmoid_min_temp in '1' '0.1'; do
+    python main.py --name 0513_${dset}_${arch}_entm${entmoid_min_temp}_ents${entmoid_anneal_steps} --dataset ${dset} --random_search ${random_search} --cpu 4 --gpus 1 --mem 8 --fp16 1 --arch ${arch} --entmoid_min_temp ${entmoid_min_temp} --seed 23 --entmoid_anneal_steps ${entmoid_anneal_steps}
+  done
+done
+
+
+## (R) Rerun the best for mimic2 and adult.
+for d in \
+'0513_mimic2_GAMAtt_entm1_s89_nl5_nt400_td0_d4_od0.2_ld0.3_cs0.5_lr0.01_lo0_la1e-07_pt0_pr0_mn0_ol0_ll0_da8' \
+'0513_adult_GAMAtt_entm1_s53_nl4_nt125_td0_d4_od0.0_ld0.0_cs0.5_lr0.005_lo0_la1e-06_pt0_pr0_mn0_ol0_ll1_da16' \
+; do
+  postfix=${d:4}
+  for fold in '0' '1' '2' '3' '4'; do
+    ./my_sbatch --cpu 4 --gpus 1 --mem 8 python -u main.py --name 0514_f${fold}_best${postfix} --load_from_hparams ${d} --fold ${fold}
+  done
+done
+
+
+
+#### Run the 3-fold
+for fold in '0' '1' '2'; do
+### For the pt=0
+./my_sbatch --cpu 4 --gpus 1 --mem 8 python -u main.py --name 0515_f${fold}_ss_mimic2_GAMAtt_s55_nl2_nt250_td1_d6_od0.2_ld0.2_cs1e-05_lr0.01_lo0_la0.0_pt0_pr0.15_mn0.1_ol0_ll1_da32_ds0.005 --load_from_hparams 0511_mimic2_GAMAtt_s55_nl2_nt250_td1_d6_od0.2_ld0.2_cs1e-05_lr0.01_lo0_la0.0_pt0_pr0.15_mn0.1_ol0_ll1_da32_ds0.005 --fold ${fold}
+./my_sbatch --cpu 4 --gpus 1 --mem 8 python -u main.py --name 0515_f${fold}_ss_mimic2_GAMAtt_s13_nl4_nt250_td0_d4_od0.2_ld0.3_cs1e-05_lr0.005_lo0_la1e-05_pt0_pr0.15_mn0.1_ol0_ll1_da16_ds0.01 --load_from_hparams 0511_mimic2_GAMAtt_s13_nl4_nt250_td0_d4_od0.2_ld0.3_cs1e-05_lr0.005_lo0_la1e-05_pt0_pr0.15_mn0.1_ol0_ll1_da16_ds0.01 --fold ${fold}
+./my_sbatch --cpu 4 --gpus 1 --mem 8 python -u main.py --name 0515_f${fold}_ss_mimic2_GAMAtt_s80_nl5_nt400_td1_d2_od0.1_ld0.0_cs0.1_lr0.005_lo0_la1e-05_pt0_pr0.15_mn0.1_ol0_ll1_da16_ds0.02 --load_from_hparams 0511_mimic2_GAMAtt_s80_nl5_nt400_td1_d2_od0.1_ld0.0_cs0.1_lr0.005_lo0_la1e-05_pt0_pr0.15_mn0.1_ol0_ll1_da16_ds0.02 --fold ${fold}
+./my_sbatch --cpu 4 --gpus 1 --mem 8 python -u main.py --name 0515_f${fold}_ss_mimic2_GAMAtt_s4_nl2_nt1000_td2_d6_od0.1_ld0.0_cs0.1_lr0.005_lo0_la0.0_pt0_pr0.15_mn0.1_ol0_ll1_da8_ds0.05 --load_from_hparams 0511_mimic2_GAMAtt_s4_nl2_nt1000_td2_d6_od0.1_ld0.0_cs0.1_lr0.005_lo0_la0.0_pt0_pr0.15_mn0.1_ol0_ll1_da8_ds0.05 --fold ${fold}
+./my_sbatch --cpu 4 --gpus 1 --mem 8 python -u main.py --name 0515_f${fold}_ss_mimic2_GAMAtt_s55_nl2_nt250_td1_d6_od0.2_ld0.2_cs1e-05_lr0.01_lo0_la0.0_pt0_pr0.15_mn0.1_ol0_ll1_da32_ds0.1 --load_from_hparams 0511_mimic2_GAMAtt_s55_nl2_nt250_td1_d6_od0.2_ld0.2_cs1e-05_lr0.01_lo0_la0.0_pt0_pr0.15_mn0.1_ol0_ll1_da32_ds0.1 --fold ${fold}
+./my_sbatch --cpu 4 --gpus 1 --mem 8 python -u main.py --name 0515_f${fold}_ss_mimic3_GAMAtt_s47_nl4_nt250_td1_d4_od0.2_ld0.3_cs1e-05_lr0.005_lo0_la1e-05_pt0_pr0.15_mn0.1_ol0_ll1_da32_ds0.005 --load_from_hparams 0511_mimic3_GAMAtt_s47_nl4_nt250_td1_d4_od0.2_ld0.3_cs1e-05_lr0.005_lo0_la1e-05_pt0_pr0.15_mn0.1_ol0_ll1_da32_ds0.005 --fold ${fold}
+./my_sbatch --cpu 4 --gpus 1 --mem 8 python -u main.py --name 0515_f${fold}_ss_mimic3_GAMAtt_s46_nl5_nt200_td1_d4_od0.1_ld0.1_cs1e-05_lr0.01_lo0_la1e-05_pt0_pr0.15_mn0.1_ol0_ll1_da8_ds0.01 --load_from_hparams 0511_mimic3_GAMAtt_s46_nl5_nt200_td1_d4_od0.1_ld0.1_cs1e-05_lr0.01_lo0_la1e-05_pt0_pr0.15_mn0.1_ol0_ll1_da8_ds0.01 --fold ${fold}
+./my_sbatch --cpu 4 --gpus 1 --mem 8 python -u main.py --name 0515_f${fold}_ss_mimic3_GAMAtt_s47_nl4_nt250_td1_d4_od0.2_ld0.3_cs1e-05_lr0.005_lo0_la1e-05_pt0_pr0.15_mn0.1_ol0_ll1_da32_ds0.02 --load_from_hparams 0511_mimic3_GAMAtt_s47_nl4_nt250_td1_d4_od0.2_ld0.3_cs1e-05_lr0.005_lo0_la1e-05_pt0_pr0.15_mn0.1_ol0_ll1_da32_ds0.02 --fold ${fold}
+./my_sbatch --cpu 4 --gpus 1 --mem 8 python -u main.py --name 0515_f${fold}_ss_mimic3_GAMAtt_s68_nl4_nt125_td2_d4_od0.0_ld0.0_cs1e-05_lr0.005_lo0_la1e-07_pt0_pr0.15_mn0.1_ol0_ll1_da8_ds0.05 --load_from_hparams 0511_mimic3_GAMAtt_s68_nl4_nt125_td2_d4_od0.0_ld0.0_cs1e-05_lr0.005_lo0_la1e-07_pt0_pr0.15_mn0.1_ol0_ll1_da8_ds0.05 --fold ${fold}
+./my_sbatch --cpu 4 --gpus 1 --mem 8 python -u main.py --name 0515_f${fold}_ss_mimic3_GAMAtt_s80_nl5_nt400_td1_d2_od0.1_ld0.0_cs0.1_lr0.005_lo0_la1e-05_pt0_pr0.15_mn0.1_ol0_ll1_da16_ds0.1 --load_from_hparams 0511_mimic3_GAMAtt_s80_nl5_nt400_td1_d2_od0.1_ld0.0_cs0.1_lr0.005_lo0_la1e-05_pt0_pr0.15_mn0.1_ol0_ll1_da16_ds0.1 --fold ${fold}
+./my_sbatch --cpu 4 --gpus 1 --mem 8 python -u main.py --name 0515_f${fold}_ss_adult_GAMAtt_s14_nl2_nt500_td2_d4_od0.1_ld0.3_cs0.1_lr0.005_lo0_la1e-06_pt0_pr0.15_mn0.1_ol0_ll1_da32_ds0.005 --load_from_hparams 0511_adult_GAMAtt_s14_nl2_nt500_td2_d4_od0.1_ld0.3_cs0.1_lr0.005_lo0_la1e-06_pt0_pr0.15_mn0.1_ol0_ll1_da32_ds0.005 --fold ${fold}
+./my_sbatch --cpu 4 --gpus 1 --mem 8 python -u main.py --name 0515_f${fold}_ss_adult_GAMAtt_s47_nl4_nt250_td1_d4_od0.2_ld0.3_cs1e-05_lr0.005_lo0_la1e-05_pt0_pr0.15_mn0.1_ol0_ll1_da32_ds0.01 --load_from_hparams 0511_adult_GAMAtt_s47_nl4_nt250_td1_d4_od0.2_ld0.3_cs1e-05_lr0.005_lo0_la1e-05_pt0_pr0.15_mn0.1_ol0_ll1_da32_ds0.01 --fold ${fold}
+./my_sbatch --cpu 4 --gpus 1 --mem 8 python -u main.py --name 0515_f${fold}_ss_adult_GAMAtt_s46_nl5_nt200_td1_d4_od0.1_ld0.1_cs1e-05_lr0.01_lo0_la1e-05_pt0_pr0.15_mn0.1_ol0_ll1_da8_ds0.02 --load_from_hparams 0511_adult_GAMAtt_s46_nl5_nt200_td1_d4_od0.1_ld0.1_cs1e-05_lr0.01_lo0_la1e-05_pt0_pr0.15_mn0.1_ol0_ll1_da8_ds0.02 --fold ${fold}
+./my_sbatch --cpu 4 --gpus 1 --mem 8 python -u main.py --name 0515_f${fold}_ss_adult_GAMAtt_s46_nl5_nt200_td1_d4_od0.1_ld0.1_cs1e-05_lr0.01_lo0_la1e-05_pt0_pr0.15_mn0.1_ol0_ll1_da8_ds0.05 --load_from_hparams 0511_adult_GAMAtt_s46_nl5_nt200_td1_d4_od0.1_ld0.1_cs1e-05_lr0.01_lo0_la1e-05_pt0_pr0.15_mn0.1_ol0_ll1_da8_ds0.05 --fold ${fold}
+./my_sbatch --cpu 4 --gpus 1 --mem 8 python -u main.py --name 0515_f${fold}_ss_adult_GAMAtt_s80_nl5_nt400_td1_d2_od0.1_ld0.0_cs0.1_lr0.005_lo0_la1e-05_pt0_pr0.15_mn0.1_ol0_ll1_da16_ds0.1 --load_from_hparams 0511_adult_GAMAtt_s80_nl5_nt400_td1_d2_od0.1_ld0.0_cs0.1_lr0.005_lo0_la1e-05_pt0_pr0.15_mn0.1_ol0_ll1_da16_ds0.1 --fold ${fold}
+./my_sbatch --cpu 4 --gpus 1 --mem 8 python -u main.py --name 0515_f${fold}_ss_support2_GAMAtt_s68_nl4_nt125_td2_d4_od0.0_ld0.0_cs1e-05_lr0.005_lo0_la1e-07_pt0_pr0.15_mn0.1_ol0_ll1_da8_ds0.005 --load_from_hparams 0511_support2_GAMAtt_s68_nl4_nt125_td2_d4_od0.0_ld0.0_cs1e-05_lr0.005_lo0_la1e-07_pt0_pr0.15_mn0.1_ol0_ll1_da8_ds0.005 --fold ${fold}
+./my_sbatch --cpu 4 --gpus 1 --mem 8 python -u main.py --name 0515_f${fold}_ss_support2_GAMAtt_s68_nl4_nt125_td2_d4_od0.0_ld0.0_cs1e-05_lr0.005_lo0_la1e-07_pt0_pr0.15_mn0.1_ol0_ll1_da8_ds0.01 --load_from_hparams 0511_support2_GAMAtt_s68_nl4_nt125_td2_d4_od0.0_ld0.0_cs1e-05_lr0.005_lo0_la1e-07_pt0_pr0.15_mn0.1_ol0_ll1_da8_ds0.01 --fold ${fold}
+./my_sbatch --cpu 4 --gpus 1 --mem 8 python -u main.py --name 0515_f${fold}_ss_support2_GAMAtt_s55_nl2_nt250_td1_d6_od0.2_ld0.2_cs1e-05_lr0.01_lo0_la0.0_pt0_pr0.15_mn0.1_ol0_ll1_da32_ds0.02 --load_from_hparams 0511_support2_GAMAtt_s55_nl2_nt250_td1_d6_od0.2_ld0.2_cs1e-05_lr0.01_lo0_la0.0_pt0_pr0.15_mn0.1_ol0_ll1_da32_ds0.02 --fold ${fold}
+./my_sbatch --cpu 4 --gpus 1 --mem 8 python -u main.py --name 0515_f${fold}_ss_support2_GAMAtt_s14_nl2_nt500_td2_d4_od0.1_ld0.3_cs0.1_lr0.005_lo0_la1e-06_pt0_pr0.15_mn0.1_ol0_ll1_da32_ds0.05 --load_from_hparams 0511_support2_GAMAtt_s14_nl2_nt500_td2_d4_od0.1_ld0.3_cs0.1_lr0.005_lo0_la1e-06_pt0_pr0.15_mn0.1_ol0_ll1_da32_ds0.05 --fold ${fold}
+./my_sbatch --cpu 4 --gpus 1 --mem 8 python -u main.py --name 0515_f${fold}_ss_support2_GAMAtt_s14_nl2_nt500_td2_d4_od0.1_ld0.3_cs0.1_lr0.005_lo0_la1e-06_pt0_pr0.15_mn0.1_ol0_ll1_da32_ds0.1 --load_from_hparams 0511_support2_GAMAtt_s14_nl2_nt500_td2_d4_od0.1_ld0.3_cs0.1_lr0.005_lo0_la1e-06_pt0_pr0.15_mn0.1_ol0_ll1_da32_ds0.1 --fold ${fold}
+./my_sbatch --cpu 4 --gpus 1 --mem 8 python -u main.py --name 0515_f${fold}_ss_compas_GAMAtt_s49_nl3_nt166_td0_d4_od0.2_ld0.3_cs0.5_lr0.01_lo0_la1e-05_pt0_pr0.15_mn0.1_ol0_ll1_da16_ds0.005 --load_from_hparams 0511_compas_GAMAtt_s49_nl3_nt166_td0_d4_od0.2_ld0.3_cs0.5_lr0.01_lo0_la1e-05_pt0_pr0.15_mn0.1_ol0_ll1_da16_ds0.005 --fold ${fold}
+./my_sbatch --cpu 4 --gpus 1 --mem 8 python -u main.py --name 0515_f${fold}_ss_compas_GAMAtt_s37_nl3_nt333_td1_d2_od0.0_ld0.3_cs1e-05_lr0.005_lo0_la0.0_pt0_pr0.15_mn0.1_ol0_ll1_da16_ds0.01 --load_from_hparams 0511_compas_GAMAtt_s37_nl3_nt333_td1_d2_od0.0_ld0.3_cs1e-05_lr0.005_lo0_la0.0_pt0_pr0.15_mn0.1_ol0_ll1_da16_ds0.01 --fold ${fold}
+./my_sbatch --cpu 4 --gpus 1 --mem 8 python -u main.py --name 0515_f${fold}_ss_compas_GAMAtt_s37_nl3_nt333_td1_d2_od0.0_ld0.3_cs1e-05_lr0.005_lo0_la0.0_pt0_pr0.15_mn0.1_ol0_ll1_da16_ds0.02 --load_from_hparams 0511_compas_GAMAtt_s37_nl3_nt333_td1_d2_od0.0_ld0.3_cs1e-05_lr0.005_lo0_la0.0_pt0_pr0.15_mn0.1_ol0_ll1_da16_ds0.02 --fold ${fold}
+./my_sbatch --cpu 4 --gpus 1 --mem 8 python -u main.py --name 0515_f${fold}_ss_compas_GAMAtt_s49_nl3_nt166_td0_d4_od0.2_ld0.3_cs0.5_lr0.01_lo0_la1e-05_pt0_pr0.15_mn0.1_ol0_ll1_da16_ds0.05 --load_from_hparams 0511_compas_GAMAtt_s49_nl3_nt166_td0_d4_od0.2_ld0.3_cs0.5_lr0.01_lo0_la1e-05_pt0_pr0.15_mn0.1_ol0_ll1_da16_ds0.05 --fold ${fold}
+./my_sbatch --cpu 4 --gpus 1 --mem 8 python -u main.py --name 0515_f${fold}_ss_compas_GAMAtt_s54_nl2_nt2000_td1_d4_od0.2_ld0.2_cs1e-05_lr0.005_lo0_la0.0_pt0_pr0.15_mn0.1_ol0_ll1_da32_ds0.1 --load_from_hparams 0511_compas_GAMAtt_s54_nl2_nt2000_td1_d4_od0.2_ld0.2_cs1e-05_lr0.005_lo0_la0.0_pt0_pr0.15_mn0.1_ol0_ll1_da32_ds0.1 --fold ${fold}
+./my_sbatch --cpu 4 --gpus 1 --mem 8 python -u main.py --name 0515_f${fold}_ss_credit_GAMAtt_s49_nl3_nt166_td0_d4_od0.2_ld0.3_cs0.5_lr0.01_lo0_la1e-05_pt0_pr0.15_mn0.1_ol0_ll1_da16_ds0.01 --load_from_hparams 0511_credit_GAMAtt_s49_nl3_nt166_td0_d4_od0.2_ld0.3_cs0.5_lr0.01_lo0_la1e-05_pt0_pr0.15_mn0.1_ol0_ll1_da16_ds0.01 --fold ${fold}
+./my_sbatch --cpu 4 --gpus 1 --mem 8 python -u main.py --name 0515_f${fold}_ss_credit_GAMAtt_s49_nl3_nt166_td0_d4_od0.2_ld0.3_cs0.5_lr0.01_lo0_la1e-05_pt0_pr0.15_mn0.1_ol0_ll1_da16_ds0.02 --load_from_hparams 0511_credit_GAMAtt_s49_nl3_nt166_td0_d4_od0.2_ld0.3_cs0.5_lr0.01_lo0_la1e-05_pt0_pr0.15_mn0.1_ol0_ll1_da16_ds0.02 --fold ${fold}
+./my_sbatch --cpu 4 --gpus 1 --mem 8 python -u main.py --name 0515_f${fold}_ss_credit_GAMAtt_s47_nl4_nt250_td1_d4_od0.2_ld0.3_cs1e-05_lr0.005_lo0_la1e-05_pt0_pr0.15_mn0.1_ol0_ll1_da32_ds0.05 --load_from_hparams 0511_credit_GAMAtt_s47_nl4_nt250_td1_d4_od0.2_ld0.3_cs1e-05_lr0.005_lo0_la1e-05_pt0_pr0.15_mn0.1_ol0_ll1_da32_ds0.05 --fold ${fold}
+./my_sbatch --cpu 4 --gpus 1 --mem 8 python -u main.py --name 0515_f${fold}_ss_credit_GAMAtt_s4_nl2_nt1000_td2_d6_od0.1_ld0.0_cs0.1_lr0.005_lo0_la0.0_pt0_pr0.15_mn0.1_ol0_ll1_da8_ds0.1 --load_from_hparams 0511_credit_GAMAtt_s4_nl2_nt1000_td2_d6_od0.1_ld0.0_cs0.1_lr0.005_lo0_la0.0_pt0_pr0.15_mn0.1_ol0_ll1_da8_ds0.1 --fold ${fold}
+./my_sbatch --cpu 4 --gpus 1 --mem 8 python -u main.py --name 0515_f${fold}_ss_credit_GAMAtt_s80_nl5_nt400_td1_d2_od0.1_ld0.0_cs0.1_lr0.005_lo0_la1e-05_pt0_pr0.15_mn0.1_ol0_ll1_da16_ds0.2 --load_from_hparams 0511_credit_GAMAtt_s80_nl5_nt400_td1_d2_od0.1_ld0.0_cs0.1_lr0.005_lo0_la1e-05_pt0_pr0.15_mn0.1_ol0_ll1_da16_ds0.2 --fold ${fold}
+./my_sbatch --cpu 4 --gpus 1 --mem 8 python -u main.py --name 0515_f${fold}_ss_churn_GAMAtt_s13_nl4_nt250_td0_d4_od0.2_ld0.3_cs1e-05_lr0.005_lo0_la1e-05_pt0_pr0.15_mn0.1_ol0_ll1_da16_ds0.005 --load_from_hparams 0511_churn_GAMAtt_s13_nl4_nt250_td0_d4_od0.2_ld0.3_cs1e-05_lr0.005_lo0_la1e-05_pt0_pr0.15_mn0.1_ol0_ll1_da16_ds0.005 --fold ${fold}
+./my_sbatch --cpu 4 --gpus 1 --mem 8 python -u main.py --name 0515_f${fold}_ss_churn_GAMAtt_s13_nl4_nt250_td0_d4_od0.2_ld0.3_cs1e-05_lr0.005_lo0_la1e-05_pt0_pr0.15_mn0.1_ol0_ll1_da16_ds0.01 --load_from_hparams 0511_churn_GAMAtt_s13_nl4_nt250_td0_d4_od0.2_ld0.3_cs1e-05_lr0.005_lo0_la1e-05_pt0_pr0.15_mn0.1_ol0_ll1_da16_ds0.01 --fold ${fold}
+./my_sbatch --cpu 4 --gpus 1 --mem 8 python -u main.py --name 0515_f${fold}_ss_churn_GAMAtt_s49_nl3_nt166_td0_d4_od0.2_ld0.3_cs0.5_lr0.01_lo0_la1e-05_pt0_pr0.15_mn0.1_ol0_ll1_da16_ds0.02 --load_from_hparams 0511_churn_GAMAtt_s49_nl3_nt166_td0_d4_od0.2_ld0.3_cs0.5_lr0.01_lo0_la1e-05_pt0_pr0.15_mn0.1_ol0_ll1_da16_ds0.02 --fold ${fold}
+./my_sbatch --cpu 4 --gpus 1 --mem 8 python -u main.py --name 0515_f${fold}_ss_churn_GAMAtt_s49_nl3_nt166_td0_d4_od0.2_ld0.3_cs0.5_lr0.01_lo0_la1e-05_pt0_pr0.15_mn0.1_ol0_ll1_da16_ds0.05 --load_from_hparams 0511_churn_GAMAtt_s49_nl3_nt166_td0_d4_od0.2_ld0.3_cs0.5_lr0.01_lo0_la1e-05_pt0_pr0.15_mn0.1_ol0_ll1_da16_ds0.05 --fold ${fold}
+./my_sbatch --cpu 4 --gpus 1 --mem 8 python -u main.py --name 0515_f${fold}_ss_churn_GAMAtt_s46_nl5_nt200_td1_d4_od0.1_ld0.1_cs1e-05_lr0.01_lo0_la1e-05_pt0_pr0.15_mn0.1_ol0_ll1_da8_ds0.1 --load_from_hparams 0511_churn_GAMAtt_s46_nl5_nt200_td1_d4_od0.1_ld0.1_cs1e-05_lr0.01_lo0_la1e-05_pt0_pr0.15_mn0.1_ol0_ll1_da8_ds0.1 --fold ${fold}
+# For the pt=3
+./my_sbatch --cpu 4 --gpus 1 --mem 8 python -u main.py --name 0515_f${fold}_ss_mimic2_GAMAtt_s44_nl3_nt1333_td1_d4_od0.1_ld0.0_cs0.5_lr0.01_lo0_la1e-05_pt3_pr0.15_mn0.1_ol0_ll1_da16 --load_from_hparams 0511_mimic2_GAMAtt_s44_nl3_nt1333_td1_d4_od0.1_ld0.0_cs0.5_lr0.01_lo0_la1e-05_pt3_pr0.15_mn0.1_ol0_ll1_da16 --fold ${fold} --finetune_zip 1 --finetune_data_subsample 0.005 --finetune_lr 0.0005 --finetune_freeze_steps 500
+./my_sbatch --cpu 4 --gpus 1 --mem 8 python -u main.py --name 0515_f${fold}_ss_mimic2_GAMAtt_s49_nl3_nt166_td0_d4_od0.2_ld0.3_cs0.5_lr0.01_lo0_la1e-05_pt3_pr0.15_mn0.1_ol0_ll1_da16 --load_from_hparams 0511_mimic2_GAMAtt_s49_nl3_nt166_td0_d4_od0.2_ld0.3_cs0.5_lr0.01_lo0_la1e-05_pt3_pr0.15_mn0.1_ol0_ll1_da16 --fold ${fold} --finetune_zip 1 --finetune_data_subsample 0.02 0.05 --finetune_lr 0.0003 0.0003 --finetune_freeze_steps 500 500
+./my_sbatch --cpu 4 --gpus 1 --mem 8 python -u main.py --name 0515_f${fold}_ss_mimic2_GAMAtt_s55_nl2_nt250_td1_d6_od0.2_ld0.2_cs1e-05_lr0.01_lo0_la0.0_pt3_pr0.15_mn0.1_ol0_ll1_da32 --load_from_hparams 0511_mimic2_GAMAtt_s55_nl2_nt250_td1_d6_od0.2_ld0.2_cs1e-05_lr0.01_lo0_la0.0_pt3_pr0.15_mn0.1_ol0_ll1_da32 --fold ${fold} --finetune_zip 1 --finetune_data_subsample 0.01 0.1 --finetune_lr 5e-05 0.0001 --finetune_freeze_steps 500 500
+./my_sbatch --cpu 4 --gpus 1 --mem 8 python -u main.py --name 0515_f${fold}_ss_mimic3_GAMAtt_s14_nl2_nt500_td2_d4_od0.1_ld0.3_cs0.1_lr0.005_lo0_la1e-06_pt3_pr0.15_mn0.1_ol0_ll1_da32 --load_from_hparams 0511_mimic3_GAMAtt_s14_nl2_nt500_td2_d4_od0.1_ld0.3_cs0.1_lr0.005_lo0_la1e-06_pt3_pr0.15_mn0.1_ol0_ll1_da32 --fold ${fold} --finetune_zip 1 --finetune_data_subsample 0.01 --finetune_lr 5e-05 --finetune_freeze_steps 500
+./my_sbatch --cpu 4 --gpus 1 --mem 8 python -u main.py --name 0515_f${fold}_ss_mimic3_GAMAtt_s4_nl2_nt1000_td2_d6_od0.1_ld0.0_cs0.1_lr0.005_lo0_la0.0_pt3_pr0.15_mn0.1_ol0_ll1_da8 --load_from_hparams 0511_mimic3_GAMAtt_s4_nl2_nt1000_td2_d6_od0.1_ld0.0_cs0.1_lr0.005_lo0_la0.0_pt3_pr0.15_mn0.1_ol0_ll1_da8 --fold ${fold} --finetune_zip 1 --finetune_data_subsample 0.05 0.1 --finetune_lr 0.0005 5e-05 --finetune_freeze_steps 500 500
+./my_sbatch --cpu 4 --gpus 1 --mem 8 python -u main.py --name 0515_f${fold}_ss_mimic3_GAMAtt_s68_nl4_nt125_td2_d4_od0.0_ld0.0_cs1e-05_lr0.005_lo0_la1e-07_pt3_pr0.15_mn0.1_ol0_ll1_da8 --load_from_hparams 0511_mimic3_GAMAtt_s68_nl4_nt125_td2_d4_od0.0_ld0.0_cs1e-05_lr0.005_lo0_la1e-07_pt3_pr0.15_mn0.1_ol0_ll1_da8 --fold ${fold} --finetune_zip 1 --finetune_data_subsample 0.005 --finetune_lr 5e-05 --finetune_freeze_steps 500
+./my_sbatch --cpu 4 --gpus 1 --mem 8 python -u main.py --name 0515_f${fold}_ss_mimic3_GAMAtt_s80_nl5_nt400_td1_d2_od0.1_ld0.0_cs0.1_lr0.005_lo0_la1e-05_pt3_pr0.15_mn0.1_ol0_ll1_da16 --load_from_hparams 0511_mimic3_GAMAtt_s80_nl5_nt400_td1_d2_od0.1_ld0.0_cs0.1_lr0.005_lo0_la1e-05_pt3_pr0.15_mn0.1_ol0_ll1_da16 --fold ${fold} --finetune_zip 1 --finetune_data_subsample 0.02 --finetune_lr 0.0003 --finetune_freeze_steps 500
+./my_sbatch --cpu 4 --gpus 1 --mem 8 python -u main.py --name 0515_f${fold}_ss_adult_GAMAtt_s13_nl4_nt250_td0_d4_od0.2_ld0.3_cs1e-05_lr0.005_lo0_la1e-05_pt3_pr0.15_mn0.1_ol0_ll1_da16 --load_from_hparams 0511_adult_GAMAtt_s13_nl4_nt250_td0_d4_od0.2_ld0.3_cs1e-05_lr0.005_lo0_la1e-05_pt3_pr0.15_mn0.1_ol0_ll1_da16 --fold ${fold} --finetune_zip 1 --finetune_data_subsample 0.05 --finetune_lr 0.0003 --finetune_freeze_steps 500
+./my_sbatch --cpu 4 --gpus 1 --mem 8 python -u main.py --name 0515_f${fold}_ss_adult_GAMAtt_s54_nl2_nt2000_td1_d4_od0.2_ld0.2_cs1e-05_lr0.005_lo0_la0.0_pt3_pr0.15_mn0.1_ol0_ll1_da32 --load_from_hparams 0511_adult_GAMAtt_s54_nl2_nt2000_td1_d4_od0.2_ld0.2_cs1e-05_lr0.005_lo0_la0.0_pt3_pr0.15_mn0.1_ol0_ll1_da32 --fold ${fold} --finetune_zip 1 --finetune_data_subsample 0.02 --finetune_lr 0.0001 --finetune_freeze_steps 500
+./my_sbatch --cpu 4 --gpus 1 --mem 8 python -u main.py --name 0515_f${fold}_ss_adult_GAMAtt_s55_nl2_nt250_td1_d6_od0.2_ld0.2_cs1e-05_lr0.01_lo0_la0.0_pt3_pr0.15_mn0.1_ol0_ll1_da32 --load_from_hparams 0511_adult_GAMAtt_s55_nl2_nt250_td1_d6_od0.2_ld0.2_cs1e-05_lr0.01_lo0_la0.0_pt3_pr0.15_mn0.1_ol0_ll1_da32 --fold ${fold} --finetune_zip 1 --finetune_data_subsample 0.1 --finetune_lr 0.0005 --finetune_freeze_steps 500
+./my_sbatch --cpu 4 --gpus 1 --mem 8 python -u main.py --name 0515_f${fold}_ss_adult_GAMAtt_s68_nl4_nt125_td2_d4_od0.0_ld0.0_cs1e-05_lr0.005_lo0_la1e-07_pt3_pr0.15_mn0.1_ol0_ll1_da8 --load_from_hparams 0511_adult_GAMAtt_s68_nl4_nt125_td2_d4_od0.0_ld0.0_cs1e-05_lr0.005_lo0_la1e-07_pt3_pr0.15_mn0.1_ol0_ll1_da8 --fold ${fold} --finetune_zip 1 --finetune_data_subsample 0.005 0.01 --finetune_lr 0.0003 5e-05 --finetune_freeze_steps 500 500
+./my_sbatch --cpu 4 --gpus 1 --mem 8 python -u main.py --name 0515_f${fold}_ss_support2_GAMAtt_s44_nl3_nt1333_td1_d4_od0.1_ld0.0_cs0.5_lr0.01_lo0_la1e-05_pt3_pr0.15_mn0.1_ol0_ll1_da16 --load_from_hparams 0511_support2_GAMAtt_s44_nl3_nt1333_td1_d4_od0.1_ld0.0_cs0.5_lr0.01_lo0_la1e-05_pt3_pr0.15_mn0.1_ol0_ll1_da16 --fold ${fold} --finetune_zip 1 --finetune_data_subsample 0.01 --finetune_lr 0.0005 --finetune_freeze_steps 500
+./my_sbatch --cpu 4 --gpus 1 --mem 8 python -u main.py --name 0515_f${fold}_ss_support2_GAMAtt_s49_nl3_nt166_td0_d4_od0.2_ld0.3_cs0.5_lr0.01_lo0_la1e-05_pt3_pr0.15_mn0.1_ol0_ll1_da16 --load_from_hparams 0511_support2_GAMAtt_s49_nl3_nt166_td0_d4_od0.2_ld0.3_cs0.5_lr0.01_lo0_la1e-05_pt3_pr0.15_mn0.1_ol0_ll1_da16 --fold ${fold} --finetune_zip 1 --finetune_data_subsample 0.02 --finetune_lr 5e-05 --finetune_freeze_steps 500
+./my_sbatch --cpu 4 --gpus 1 --mem 8 python -u main.py --name 0515_f${fold}_ss_support2_GAMAtt_s4_nl2_nt1000_td2_d6_od0.1_ld0.0_cs0.1_lr0.005_lo0_la0.0_pt3_pr0.15_mn0.1_ol0_ll1_da8 --load_from_hparams 0511_support2_GAMAtt_s4_nl2_nt1000_td2_d6_od0.1_ld0.0_cs0.1_lr0.005_lo0_la0.0_pt3_pr0.15_mn0.1_ol0_ll1_da8 --fold ${fold} --finetune_zip 1 --finetune_data_subsample 0.05 --finetune_lr 5e-05 --finetune_freeze_steps 500
+./my_sbatch --cpu 4 --gpus 1 --mem 8 python -u main.py --name 0515_f${fold}_ss_support2_GAMAtt_s68_nl4_nt125_td2_d4_od0.0_ld0.0_cs1e-05_lr0.005_lo0_la1e-07_pt3_pr0.15_mn0.1_ol0_ll1_da8 --load_from_hparams 0511_support2_GAMAtt_s68_nl4_nt125_td2_d4_od0.0_ld0.0_cs1e-05_lr0.005_lo0_la1e-07_pt3_pr0.15_mn0.1_ol0_ll1_da8 --fold ${fold} --finetune_zip 1 --finetune_data_subsample 0.005 --finetune_lr 0.0005 --finetune_freeze_steps 500
+./my_sbatch --cpu 4 --gpus 1 --mem 8 python -u main.py --name 0515_f${fold}_ss_support2_GAMAtt_s76_nl2_nt1000_td2_d6_od0.1_ld0.0_cs1e-05_lr0.005_lo0_la0.0_pt3_pr0.15_mn0.1_ol0_ll1_da8 --load_from_hparams 0511_support2_GAMAtt_s76_nl2_nt1000_td2_d6_od0.1_ld0.0_cs1e-05_lr0.005_lo0_la0.0_pt3_pr0.15_mn0.1_ol0_ll1_da8 --fold ${fold} --finetune_zip 1 --finetune_data_subsample 0.1 --finetune_lr 0.0001 --finetune_freeze_steps 500
+./my_sbatch --cpu 4 --gpus 1 --mem 8 python -u main.py --name 0515_f${fold}_ss_compas_GAMAtt_s13_nl4_nt250_td0_d4_od0.2_ld0.3_cs1e-05_lr0.005_lo0_la1e-05_pt3_pr0.15_mn0.1_ol0_ll1_da16 --load_from_hparams 0511_compas_GAMAtt_s13_nl4_nt250_td0_d4_od0.2_ld0.3_cs1e-05_lr0.005_lo0_la1e-05_pt3_pr0.15_mn0.1_ol0_ll1_da16 --fold ${fold} --finetune_zip 1 --finetune_data_subsample 0.05 --finetune_lr 0.0005 --finetune_freeze_steps 500
+./my_sbatch --cpu 4 --gpus 1 --mem 8 python -u main.py --name 0515_f${fold}_ss_compas_GAMAtt_s37_nl3_nt333_td1_d2_od0.0_ld0.3_cs1e-05_lr0.005_lo0_la0.0_pt3_pr0.15_mn0.1_ol0_ll1_da16 --load_from_hparams 0511_compas_GAMAtt_s37_nl3_nt333_td1_d2_od0.0_ld0.3_cs1e-05_lr0.005_lo0_la0.0_pt3_pr0.15_mn0.1_ol0_ll1_da16 --fold ${fold} --finetune_zip 1 --finetune_data_subsample 0.005 0.02 --finetune_lr 0.0001 0.0001 --finetune_freeze_steps 500 500
+./my_sbatch --cpu 4 --gpus 1 --mem 8 python -u main.py --name 0515_f${fold}_ss_compas_GAMAtt_s56_nl2_nt2000_td1_d4_od0.0_ld0.0_cs1e-05_lr0.01_lo0_la0.0_pt3_pr0.15_mn0.1_ol0_ll1_da32 --load_from_hparams 0511_compas_GAMAtt_s56_nl2_nt2000_td1_d4_od0.0_ld0.0_cs1e-05_lr0.01_lo0_la0.0_pt3_pr0.15_mn0.1_ol0_ll1_da32 --fold ${fold} --finetune_zip 1 --finetune_data_subsample 0.1 --finetune_lr 5e-05 --finetune_freeze_steps 500
+./my_sbatch --cpu 4 --gpus 1 --mem 8 python -u main.py --name 0515_f${fold}_ss_compas_GAMAtt_s80_nl5_nt400_td1_d2_od0.1_ld0.0_cs0.1_lr0.005_lo0_la1e-05_pt3_pr0.15_mn0.1_ol0_ll1_da16 --load_from_hparams 0511_compas_GAMAtt_s80_nl5_nt400_td1_d2_od0.1_ld0.0_cs0.1_lr0.005_lo0_la1e-05_pt3_pr0.15_mn0.1_ol0_ll1_da16 --fold ${fold} --finetune_zip 1 --finetune_data_subsample 0.01 --finetune_lr 0.0005 --finetune_freeze_steps 500
+./my_sbatch --cpu 4 --gpus 1 --mem 8 python -u main.py --name 0515_f${fold}_ss_credit_GAMAtt_s49_nl3_nt166_td0_d4_od0.2_ld0.3_cs0.5_lr0.01_lo0_la1e-05_pt3_pr0.15_mn0.1_ol0_ll1_da16 --load_from_hparams 0511_credit_GAMAtt_s49_nl3_nt166_td0_d4_od0.2_ld0.3_cs0.5_lr0.01_lo0_la1e-05_pt3_pr0.15_mn0.1_ol0_ll1_da16 --fold ${fold} --finetune_zip 1 --finetune_data_subsample 0.02 0.05 --finetune_lr 5e-05 0.0003 --finetune_freeze_steps 500 500
+./my_sbatch --cpu 4 --gpus 1 --mem 8 python -u main.py --name 0515_f${fold}_ss_credit_GAMAtt_s4_nl2_nt1000_td2_d6_od0.1_ld0.0_cs0.1_lr0.005_lo0_la0.0_pt3_pr0.15_mn0.1_ol0_ll1_da8 --load_from_hparams 0511_credit_GAMAtt_s4_nl2_nt1000_td2_d6_od0.1_ld0.0_cs0.1_lr0.005_lo0_la0.0_pt3_pr0.15_mn0.1_ol0_ll1_da8 --fold ${fold} --finetune_zip 1 --finetune_data_subsample 0.1 0.2 --finetune_lr 5e-05 0.0005 --finetune_freeze_steps 500 500
+./my_sbatch --cpu 4 --gpus 1 --mem 8 python -u main.py --name 0515_f${fold}_ss_credit_GAMAtt_s79_nl5_nt200_td2_d4_od0.1_ld0.3_cs1e-05_lr0.01_lo0_la0.0_pt3_pr0.15_mn0.1_ol0_ll1_da8 --load_from_hparams 0511_credit_GAMAtt_s79_nl5_nt200_td2_d4_od0.1_ld0.3_cs1e-05_lr0.01_lo0_la0.0_pt3_pr0.15_mn0.1_ol0_ll1_da8 --fold ${fold} --finetune_zip 1 --finetune_data_subsample 0.01 --finetune_lr 0.0005 --finetune_freeze_steps 500
+./my_sbatch --cpu 4 --gpus 1 --mem 8 python -u main.py --name 0515_f${fold}_ss_churn_GAMAtt_s14_nl2_nt500_td2_d4_od0.1_ld0.3_cs0.1_lr0.005_lo0_la1e-06_pt3_pr0.15_mn0.1_ol0_ll1_da32 --load_from_hparams 0511_churn_GAMAtt_s14_nl2_nt500_td2_d4_od0.1_ld0.3_cs0.1_lr0.005_lo0_la1e-06_pt3_pr0.15_mn0.1_ol0_ll1_da32 --fold ${fold} --finetune_zip 1 --finetune_data_subsample 0.01 --finetune_lr 5e-05 --finetune_freeze_steps 500
+./my_sbatch --cpu 4 --gpus 1 --mem 8 python -u main.py --name 0515_f${fold}_ss_churn_GAMAtt_s47_nl4_nt250_td1_d4_od0.2_ld0.3_cs1e-05_lr0.005_lo0_la1e-05_pt3_pr0.15_mn0.1_ol0_ll1_da32 --load_from_hparams 0511_churn_GAMAtt_s47_nl4_nt250_td1_d4_od0.2_ld0.3_cs1e-05_lr0.005_lo0_la1e-05_pt3_pr0.15_mn0.1_ol0_ll1_da32 --fold ${fold} --finetune_zip 1 --finetune_data_subsample 0.1 --finetune_lr 5e-05 --finetune_freeze_steps 500
+./my_sbatch --cpu 4 --gpus 1 --mem 8 python -u main.py --name 0515_f${fold}_ss_churn_GAMAtt_s49_nl3_nt166_td0_d4_od0.2_ld0.3_cs0.5_lr0.01_lo0_la1e-05_pt3_pr0.15_mn0.1_ol0_ll1_da16 --load_from_hparams 0511_churn_GAMAtt_s49_nl3_nt166_td0_d4_od0.2_ld0.3_cs0.5_lr0.01_lo0_la1e-05_pt3_pr0.15_mn0.1_ol0_ll1_da16 --fold ${fold} --finetune_zip 1 --finetune_data_subsample 0.02 0.05 --finetune_lr 0.0005 0.0001 --finetune_freeze_steps 500 500
+./my_sbatch --cpu 4 --gpus 1 --mem 8 python -u main.py --name 0515_f${fold}_ss_churn_GAMAtt_s55_nl2_nt250_td1_d6_od0.2_ld0.2_cs1e-05_lr0.01_lo0_la0.0_pt3_pr0.15_mn0.1_ol0_ll1_da32 --load_from_hparams 0511_churn_GAMAtt_s55_nl2_nt250_td1_d6_od0.2_ld0.2_cs1e-05_lr0.01_lo0_la0.0_pt3_pr0.15_mn0.1_ol0_ll1_da32 --fold ${fold} --finetune_zip 1 --finetune_data_subsample 0.005 --finetune_lr 0.0005 --finetune_freeze_steps 500
+done
+
+
+
+
+# Test for 10 runs for 2 other folds
+arch='GAMAtt'
+finetune_freeze_steps='500'
+finetune_lr='5e-4 3e-4 1e-4 5e-5'
+#random_search='10'
+random_search='10'
+pretraining_ratio='0.15'
+pretrain='3'
+send_pt0='1'
+#for fold in '1' '2'; do
+fold='2'
+for dset in 'mimic2' 'mimic3' 'adult' 'support2'; do
+#for dset in 'mimic2' 'mimic3' 'adult' 'compas' 'support2' 'credit' 'churn'; do
+  finetune_data_subsample='0.005 0.01 0.02 0.05 0.1'
+  if [[ "${dset}" == "credit" ]]; then # Credit can not be smaller than 0.01
+    finetune_data_subsample='0.01 0.02 0.05 0.1 0.2'
+  fi
+  python main.py --name 0516_f${fold}_${dset}_${arch} --dataset ${dset} --random_search ${random_search} --cpu 4 --gpus 1 --mem 8 --fp16 1 --arch ${arch} --pretrain ${pretrain} --finetune_data_subsample ${finetune_data_subsample} --send_pt0 ${send_pt0} --finetune_lr ${finetune_lr} --finetune_freeze_steps ${finetune_freeze_steps} --split_train_as_val 1 --seed 30 --pretraining_ratio ${pretraining_ratio} --ignore_prev_runs 1 --fold ${fold}
+done
+#done
+
+
+random_search='5'
+for dset in 'mimic2' 'mimic3'; do
+    for arch in 'GAM' 'GAMAtt'; do
+    python main.py --name 0517_${dset}_${arch}_ga2m --dataset ${dset} --random_search ${random_search} --cpu 4 --gpus 1 --mem 8 --fp16 1 --arch ${arch} --seed 12 --ga2m 1
+    done
+done
+
+
+# Run baselines for 3 folds and various data samples
+for fold in '0' '1' '2'; do
+#  for model_name in 'spline' 'ebm-o100-i100'; do # 'xgb-o50'
+  for model_name in 'xgb-o50'; do # 'xgb-o50'
+    for dset in 'mimic2' 'mimic3' 'adult' 'compas' 'support2' 'credit' 'churn'; do
+      diff_ds='0.005'
+      if [[ "${dset}" == "credit" ]]; then # Credit can not be smaller than 0.01
+        diff_ds='0.2'
+      fi
+      for ds in '0.01' '0.02' '0.05' '0.1' ${diff_ds}; do
+        echo "${dset} ${model_name} f=${fold} ds=${ds}"
+        ./my_sbatch --cpu 10 --gpus 0 --mem 40 -p cpu python -u baselines.py --name 0308_${dset}_${model_name}_ds${ds}_f${fold} --dataset ${dset} --model_name ${model_name} --data_subsample ${ds} --fold ${fold}
+      done
+    done
+  done
+done
+
+
+random_search='5'
+for dset in 'mimic2' 'mimic3'; do
+    for arch in 'GAM' 'GAMAtt'; do
+    python main.py --name 0518_${dset}_${arch}_ga2m --dataset ${dset} --random_search ${random_search} --cpu 4 --gpus 1 --mem 8 --fp16 1 --arch ${arch} --seed 22 --ga2m 1
+    done
+done
+
+random_search='10'
+for dset in 'wine' 'support2' 'mimic2' 'mimic3'; do
+    for arch in 'GAM' 'GAMAtt'; do
+    python main.py --name 0518_${dset}_${arch}_ga2m --dataset ${dset} --random_search ${random_search} --cpu 4 --gpus 1 --mem 8 --fp16 1 --arch ${arch} --seed 22 --ga2m 1
+    done
+done
+
+
+random_search='10'
+for dset in 'mimic2' 'mimic3' 'adult' 'compas' 'support2' 'credit' 'churn'; do
+    for arch in 'ODST'; do
+    python main.py --name 0519_${dset}_${arch} --dataset ${dset} --random_search ${random_search} --cpu 4 --gpus 1 --mem 8 --fp16 1 --arch ${arch} --seed 22
+    done
+done
+
+for dset in 'mimic2' 'mimic3' 'adult' 'compas' 'support2' 'credit' 'churn'; do
+  mv results/${dset}_ODST_new10.csv results/${dset}_ODST_new9.csv
+done
+
+
+
+
+
+# Run the best GA2M!
+for d in \
+'0518_wine_GAMAtt_ga2m_s87_nl4_nt1000_td1_d6_od0.2_ld0.0_cs0.5_lr0.01_lo0_la0.0_pt0_pr0_mn0_ol0_ll0_da16' \
+'0518_support2_GAMAtt_ga2m_s4_nl2_nt250_td0_d6_od0.2_ld0.3_cs1.0_lr0.01_lo0_la0.0_pt0_pr0_mn0_ol0_ll0_da16' \
+'0518_mimic3_GAMAtt_ga2m_s87_nl4_nt1000_td1_d6_od0.2_ld0.0_cs0.5_lr0.01_lo0_la0.0_pt0_pr0_mn0_ol0_ll0_da16' \
+'0517_mimic2_GAMAtt_ga2m_s42_nl4_nt500_td1_d6_od0.0_ld0.0_cs0.2_lr0.01_lo0_la0.0_pt0_pr0_mn0_ol0_ll0_da16' \
+; do
+  postfix=${d:4}
+  for fold in '0' '1' '2' '3' '4'; do
+    ./my_sbatch --cpu 4 --gpus 1 --mem 8 python -u main.py --name 0519_f${fold}_best${postfix} --load_from_hparams ${d} --fold ${fold}
+  done
+done
+
+# (0520) (R) the best ODST
+#'0519_mimic2_ODST_s17_nl3_nt166_td0_d6_od0.2_cs0.2_lr0.005_la1e-06_ll0_ld0.0' \
+#'0519_adult_ODST_s93_nl2_nt1000_td0_d4_od0.2_cs0.2_lr0.005_la1e-07_ll0_ld0.0' \
+#'0519_mimic3_ODST_s93_nl2_nt1000_td0_d4_od0.2_cs0.2_lr0.005_la1e-07_ll0_ld0.0' \
+#'0519_compas_ODST_s3_nl5_nt100_td1_d2_od0.0_cs0.2_lr0.005_la0.0_ll0_ld0.0' \
+#'0519_churn_ODST_s3_nl5_nt100_td1_d2_od0.0_cs0.2_lr0.005_la0.0_ll0_ld0.0' \
+#'0519_credit_ODST_s87_nl3_nt166_td0_d6_od0.0_cs0.2_lr0.01_la1e-07_ll1_ld0.2' \
+#'0519_support2_ODST_s93_nl2_nt1000_td0_d4_od0.2_cs0.2_lr0.005_la1e-07_ll0_ld0.0' \
+'0522_bikeshare_ODST_s49_nl3_nt333_td1_d4_od0.1_cs0.5_lr0.005_la1e-05_ll1_ld0.3' \
+for d in \
+
+; do
+  postfix=${d:4}
+  for fold in '0' '1' '2' '3' '4'; do
+    ./my_sbatch --qos deadline --cpu 4 --gpus 1 --mem 8 python -u main.py --name 0521_f${fold}_best${postfix} --load_from_hparams ${d} --fold ${fold}
+  done
+done
+
+# (R) run ga2m in other datasets: bikeshare,
+random_search='10'
+for dset in 'bikeshare' 'adult' 'churn' 'compas' 'credit'; do
+    for arch in 'GAMAtt' 'GAM'; do
+    python main.py --name 0518_${dset}_${arch}_ga2m --dataset ${dset} --random_search ${random_search} --cpu 4 --gpus 1 --mem 8 --fp16 1 --arch ${arch} --seed 23 --ga2m 1
+    done
+done
+
+random_search='20'
+for dset in 'bikeshare' 'adult' 'compas' 'wine' 'support2'; do
+    for arch in 'GAM'; do
+    python main.py --name 0518_${dset}_${arch}_ga2m --dataset ${dset} --random_search ${random_search} --cpu 4 --gpus 1 --mem 8 --fp16 1 --arch ${arch} --seed 23 --ga2m 1
+    done
+done
+random_search='20'
+for dset in 'bikeshare'; do
+    for arch in 'GAM'; do
+    python main.py --name 0522_${dset}_${arch} --dataset ${dset} --random_search ${random_search} --cpu 4 --gpus 1 --mem 8 --fp16 1 --arch ${arch} --seed 22
+    done
+done
+
+random_search='25'
+for dset in 'support2'; do
+    for arch in 'GAMAtt'; do
+    python main.py --name 0518_${dset}_${arch}_ga2m --dataset ${dset} --random_search ${random_search} --cpu 4 --gpus 1 --mem 8 --fp16 1 --arch ${arch} --seed 22 --ga2m 1
+    done
+done
+
+
+
+for model_name in 'spline' 'ebm-o100-i100' 'xgb-o50' 'xgb-d3'; do
+  for dset in 'bikeshare'; do
+    for fold in '0' '1' '2' '3' '4'; do
+      ./my_sbatch --cpu 10 --gpus 0 --mem 40 -p cpu python -u baselines.py --name 0308_${dset}_${model_name}_f${fold} --dataset ${dset} --model_name ${model_name} --fold ${fold}
+    done
+  done
+done
+
+
+fold='0'
+for model_name in 'ebm-o50-i50-it4' 'ebm-o50-i50-it8' 'ebm-o50-i50-it16' 'ebm-o50-i50-it32' 'ebm-o50-i50-it64'; do
+  for dset in 'bikeshare' 'adult' 'compas' 'churn' 'credit' 'mimic2' 'mimic3' 'wine' 'support2'; do
+      ./my_sbatch --cpu 10 --gpus 0 --mem 40 -p cpu python -u baselines.py --name 0308_${dset}_${model_name}_f${fold} --dataset ${dset} --model_name ${model_name} --fold ${fold}
+  done
+done
+fold='0'
+for model_name in 'ebm-o50-i50-it128' 'ebm-o50-i50-it256'; do
+  for dset in 'bikeshare' 'adult' 'compas' 'churn' 'credit' 'mimic2' 'mimic3' 'wine' 'support2'; do
+      ./my_sbatch --cpu 10 --gpus 0 --mem 40 -p cpu python -u baselines.py --name 0308_${dset}_${model_name}_f${fold} --dataset ${dset} --model_name ${model_name} --fold ${fold}
+  done
+done
+
+# (R) run for EBM interactions 5-fold
+for dset in 'bikeshare' 'adult' 'compas' 'churn' 'credit' 'mimic2' 'mimic3' 'wine' 'support2'; do
+  it='128'
+  if [[ "${dset}" == "mimic2" ]]; then
+    it='64'
+  fi
+  if [[ "${dset}" == "compas" ]]; then
+    it='16'
+  fi
+  if [[ "${dset}" == "churn" ]]; then
+    it='32'
+  fi
+  if [[ "${dset}" == "credit" ]]; then
+    it='256'
+  fi
+  if [[ "${dset}" == "wine" ]]; then
+    it='64'
+  fi
+
+  model_name="ebm-o100-i100-it${it}"
+  for fold in '0' '1' '2' '3' '4'; do
+    ./my_sbatch --cpu 10 --gpus 0 --mem 40 -p cpu python -u baselines.py --name 0308_${dset}_${model_name}_f${fold} --dataset ${dset} --model_name ${model_name} --fold ${fold}
+    done
+done
+
+'0308_mimic2_ebm-o50-i50-it64_f0',
+ '0308_adult_ebm-o50-i50-it128_f0',
+ '0308_mimic3_ebm-o50-i50-it128_f0',
+ '0308_compas_ebm-o50-i50-it16_f0',
+ '0308_churn_ebm-o50-i50-it32_f0',
+ '0308_credit__f0',
+ '0308_support2_ebm-o50-i50-it128_f0',
+ '0308_wine_ebm-o50-i50-it64_f0',
+ '0308_bikeshare_ebm-o50-i50-it128_f0'
+
+
+# TORUN:
+random_search='40'
+for dset in 'year' 'epsilon' 'yahoo' 'microsoft' 'higgs' 'click'; do
+    for arch in 'GAMAtt'; do
+    python main.py --name 0525_${dset}_${arch}_ga2m --dataset ${dset} --random_search ${random_search} --cpu 4 --gpus 1 --mem 8 --fp16 1 --arch ${arch} --seed 22 --ga2m 1
+    done
+done
+
+
+# (0519) best for ga2m
+for d in \
+'0518_adult_GAM_ga2m_s32_nl3_nt1333_td2_d4_od0.2_ld0.2_cs1.0_lr0.005_lo0_la1e-05_pt0_pr0_mn0_ol0_ll1' \
+'0518_compas_GAM_ga2m_s32_nl4_nt1000_td2_d2_od0.2_ld0.2_cs0.2_lr0.005_lo0_la0.0_pt0_pr0_mn0_ol0_ll1' \
+'0518_churn_GAMAtt_ga2m_s31_nl3_nt333_td2_d2_od0.0_ld0.2_cs0.5_lr0.005_lo0_la0.0_pt0_pr0_mn0_ol0_ll0_da32' \
+'0518_credit_GAMAtt_ga2m_s97_nl3_nt666_td1_d4_od0.2_ld0.0_cs0.5_lr0.01_lo0_la1e-07_pt0_pr0_mn0_ol0_ll1_da32' \
+'0518_bikeshare_GAM_ga2m_s83_nl4_nt125_td1_d6_od0.0_ld0.3_cs0.5_lr0.01_lo0_la0.0_pt0_pr0_mn0_ol0_ll1' \
+; do
+  postfix=${d:4}
+  for fold in '0' '1' '2' '3' '4'; do
+    ./my_sbatch --cpu 4 --gpus 1 --mem 8 python -u main.py --name 0519_f${fold}_best${postfix} --load_from_hparams ${d} --fold ${fold}
+  done
+done
+
+
+
+# (0519) best for bikeshare. Use date 0525
+for d in \
+'0522_bikeshare_GAM_s55_nl2_nt250_td1_d2_od0.2_ld0.3_cs0.5_lr0.005_lo0_la1e-07_pt0_pr0_mn0_ol0_ll1' \
+; do
+  postfix=${d:4}
+  for fold in '0' '1' '2' '3' '4'; do
+    ./my_sbatch --qos deadline --cpu 4 --gpus 1 --mem 8 python -u main.py --name 0525_f${fold}_best${postfix} --load_from_hparams ${d} --fold ${fold}
+  done
+done
+
+
+# Run the l2 interactions for MIMIC2...
+load_from_hparams='0519_f0_best_mimic2_GAMAtt_ga2m_s42_nl4_nt500_td1_d6_od0.0_ld0.0_cs0.2_lr0.01_lo0_la0.0_pt0_pr0_mn0_ol0_ll0_da16'
+qos='deadline'
+for l2_interactions in '0.' '1e-4' '1e-5' '1e-6' '1e-7' '1e-8'; do
+./my_sbatch --qos ${qos} --cpu 4 --gpus 1 --mem 8 python -u main.py --name 0524_mimic2_l2itx${l2_interactions} --load_from_hparams ${load_from_hparams} --l2_interactions ${l2_interactions}
+done
+
+
+# Run the l2/l1 interactions for MIMIC2
+load_from_hparams='0519_f0_best_mimic2_GAMAtt_ga2m_s42_nl4_nt500_td1_d6_od0.0_ld0.0_cs0.2_lr0.01_lo0_la0.0_pt0_pr0_mn0_ol0_ll0_da16'
+qos='deadline'
+for l2_interactions in '1e-3' '1e-4' '1e-5' '1e-6' '1e-7'; do
+./my_sbatch --qos ${qos} --cpu 4 --gpus 1 --mem 8 python -u main.py --name 0526_mimic2_l2itx${l2_interactions} --load_from_hparams ${load_from_hparams} --l2_interactions ${l2_interactions}
+done
+for l1_interactions in '1e-3' '1e-4' '1e-5' '1e-6' '1e-7'; do
+./my_sbatch --qos ${qos} --cpu 4 --gpus 1 --mem 8 python -u main.py --name 0526_mimic2_l1itx${l1_interactions} --load_from_hparams ${load_from_hparams} --l1_interactions ${l1_interactions}
+done
+
+#### EBM iterations for large datasets: to see if the performance is too good.
+# (R) run for EBM interactions 5-fold
+for dset in 'year' 'microsoft' 'higgs' 'click' 'yahoo'; do
+  model_name="ebm-o50-i50-it64"
+  if [[ "${dset}" == "yahoo" ]]; then
+    model_name='ebm-o10-i10-it64'
+  fi
+  ./my_sbatch --cpu 10 --gpus 0 --mem 80 -p cpu python -u baselines.py --name 0308_${dset}_${model_name} --dataset ${dset} --model_name ${model_name}
+done
+
+# Run the l2/l1 interactions for MIMIC2
+load_from_hparams='0519_f0_best_mimic2_GAMAtt_ga2m_s42_nl4_nt500_td1_d6_od0.0_ld0.0_cs0.2_lr0.01_lo0_la0.0_pt0_pr0_mn0_ol0_ll0_da16'
+qos='deadline'
+for l2_interactions in '0.1' '0.01'; do
+./my_sbatch --qos ${qos} --cpu 4 --gpus 1 --mem 8 python -u main.py --name 0526_mimic2_l2itx${l2_interactions} --load_from_hparams ${load_from_hparams} --l2_interactions ${l2_interactions}
+done
+for l1_interactions in '0.1' '0.01'; do
+./my_sbatch --qos ${qos} --cpu 4 --gpus 1 --mem 8 python -u main.py --name 0526_mimic2_l1itx${l1_interactions} --load_from_hparams ${load_from_hparams} --l1_interactions ${l1_interactions}
+done
+
+
+
+
+random_search='30'
+for dset in 'wine' 'mimic2'; do
+    for arch in 'GAM' 'GAMAtt'; do
+    python main.py --name 0518_${dset}_${arch}_ga2m --dataset ${dset} --random_search ${random_search} --cpu 4 --gpus 1 --mem 8 --fp16 1 --arch ${arch} --seed 36 --ga2m 1
+    done
+done
+
+
+
+#### More GA2M search for mimic2,mimic3,compas,credit
+random_search='30'
+for dset in 'compas' 'mimic3' 'credit'; do
+    for arch in 'GAM' 'GAMAtt'; do
+    python main.py --name 0518_${dset}_${arch}_ga2m --dataset ${dset} --random_search ${random_search} --cpu 4 --gpus 1 --mem 8 --fp16 1 --arch ${arch} --seed 36 --ga2m 1
+    done
+done
+
+
+
+#### Wine ODST random search
+random_search='50'
+for dset in 'wine'; do
+    for arch in 'ODST'; do
+    python main.py --name 0519_${dset}_${arch} --dataset ${dset} --random_search ${random_search} --cpu 4 --gpus 1 --mem 8 --fp16 1 --arch ${arch} --seed 22
+    done
+done
+
+
+
+# EBM too strong. Might be cuz it is choosing the best in test set 0. Try just fix 64. Check if EBM gets slightly worse
+for dset in 'bikeshare' 'adult' 'compas' 'churn' 'credit' 'mimic2' 'mimic3' 'wine' 'support2'; do
+  it='64'
+  model_name="ebm-o100-i100-it${it}"
+  for fold in '0' '1' '2' '3' '4'; do
+    ./my_sbatch --cpu 10 --gpus 0 --mem 40 -p cpu python -u baselines.py --name 0308_${dset}_${model_name}_f${fold} --dataset ${dset} --model_name ${model_name} --fold ${fold}
+    done
+done
+
+
+
+# New best for these 5 datasets 0527. Check v.s. old best (0521) is better
+for d in \
+'0518_support2_GAMAtt_ga2m_s59_nl3_nt1333_td2_d2_od0.2_ld0.1_cs0.5_lr0.01_lo0_la1e-07_pt0_pr0_mn0_ol0_ll0_da32' \
+'0518_adult_GAM_ga2m_s39_nl3_nt666_td2_d4_od0.1_ld0.3_cs0.2_lr0.005_lo0_la1e-06_pt0_pr0_mn0_ol0_ll1' \
+'0517_mimic2_GAMAtt_ga2m_s10_nl2_nt2000_td0_d6_od0.0_ld0.0_cs0.2_lr0.005_lo0_la1e-05_pt0_pr0_mn0_ol0_ll0_da8' \
+'0518_compas_GAMAtt_ga2m_s93_nl3_nt166_td1_d4_od0.1_ld0.0_cs0.5_lr0.01_lo0_la0.0_pt0_pr0_mn0_ol0_ll1_da8' \
+; do
+  postfix=${d:4}
+  for fold in '0' '1' '2' '3' '4'; do
+    ./my_sbatch --qos deadline --cpu 4 --gpus 1 --mem 8 python -u main.py --name 0527_f${fold}_best${postfix} --load_from_hparams ${d} --fold ${fold}
+  done
+done
+
+
+
+# New best for wine ODST: check it v.s. 0507 which one is better
+for d in \
+'0519_wine_ODST_s73_nl2_nt500_td1_d4_od0.0_cs1.0_lr0.01_la0.0_ll0_ld0.0' \
+; do
+  postfix=${d:4}
+  for fold in '0' '1' '2' '3' '4'; do
+    ./my_sbatch --cpu 4 --gpus 1 --mem 8 python -u main.py --name 0521_f${fold}_best${postfix} --load_from_hparams ${d} --fold ${fold}
+  done
+done
+
+
+# Run a xgb-d5 in bikeshare
+for dset in 'bikeshare'; do
+  model_name="xgb-d5"
+  for fold in '0' '1' '2' '3' '4'; do
+    ./my_sbatch --cpu 10 --gpus 0 --mem 40 -p cpu python -u baselines.py --name 0308_${dset}_${model_name}_f${fold} --dataset ${dset} --model_name ${model_name} --fold ${fold}
+    done
+done
+
+# Check EBM-it on large. Check if they die...
+for dset in 'higgs' 'yahoo'; do
+  model_name="ebm-o10-i10-it16"
+  if [[ "${dset}" == "yahoo" ]]; then
+    model_name='ebm-o10-i10-it16'
+  fi
+  ./my_sbatch --cpu 10 --gpus 0 --mem 120 -p cpu python -u baselines.py --name 0308_${dset}_${model_name} --dataset ${dset} --model_name ${model_name}
+done
+
+
+# New best for these 5 datasets 0527. Check v.s. old best (0521) is better
+for d in \
+'0518_credit_GAMAtt_ga2m_s38_nl2_nt1000_td0_d6_od0.2_ld0.0_cs0.2_lr0.01_lo0_la0.0_pt0_pr0_mn0_ol0_ll1_da32' \
+; do
+  postfix=${d:4}
+  for fold in '0' '1' '2' '3' '4'; do
+    ./my_sbatch --qos deadline --cpu 4 --gpus 1 --mem 8 python -u main.py --name 0527_f${fold}_best${postfix} --load_from_hparams ${d} --fold ${fold}
+  done
+done
+
+
+random_search='50'
+for dset in 'year'; do
+  selectors_detach='0'
+  if [[ "${dset}" == "epsilon" ]]; then
+      selectors_detach='1'
+  fi
+  for arch in 'GAMAtt'; do
+    python main.py --name 0518_${dset}_${arch}_ga2m --dataset ${dset} --random_search ${random_search} --cpu 4 --gpus 1 --mem 8 --fp16 1 --arch ${arch} --seed 89 --ga2m 1 --selectors_detach ${selectors_detach}
+  done
+done
+
+
+random_search='50'
+for dset in 'click' 'yahoo'; do
+  selectors_detach='0'
+  if [[ "${dset}" == "epsilon" ]]; then
+      selectors_detach='1'
+  fi
+  for arch in 'GAMAtt'; do
+    python main.py --name 0518_${dset}_${arch}_ga2m --dataset ${dset} --random_search ${random_search} --cpu 4 --gpus 1 --mem 8 --fp16 1 --arch ${arch} --seed 89 --ga2m 1 --selectors_detach ${selectors_detach}
+  done
+done
+
+random_search='50'
+for dset in 'mimic2' 'support2' 'bikeshare'; do
+#  if [[ "${dset}" == "epsilon" ]]; then
+#      selectors_detach='1'
+#  fi
+  for arch in 'GAMAtt2'; do
+    python main.py --name 0518_${dset}_${arch}_ga2m --dataset ${dset} --random_search ${random_search} --cpu 4 --gpus 1 --mem 8 --fp16 1 --arch ${arch} --seed 93 --ga2m 1
+  done
+done
+random_search='25'
+for dset in 'adult' 'compas' 'wine'; do
+#  if [[ "${dset}" == "epsilon" ]]; then
+#      selectors_detach='1'
+#  fi
+  for arch in 'GAM' 'GAMAtt2'; do
+    python main.py --name 0518_${dset}_${arch}_ga2m --dataset ${dset} --random_search ${random_search} --cpu 4 --gpus 1 --mem 8 --fp16 1 --arch ${arch} --seed 93 --ga2m 1
+  done
+done
+
+
+random_search='5'
+for dset in 'epsilon'; do
+  for selectors_detach in '0' '1'; do
+#  if [[ "${dset}" == "epsilon" ]]; then
+#      selectors_detach='1'
+#  fi
+    for arch in 'GAMAtt2'; do
+      python main.py --name 0518_${dset}_${arch}_ga2m_sd${selectors_detach} --dataset ${dset} --random_search ${random_search} --cpu 4 --gpus 1 --mem 8 --fp16 1 --arch ${arch} --seed 93 --ga2m 1 --selectors_detach ${selectors_detach}
+    done
+  done
+done
+
+
+# New best for 0528
+for d in \
+'0518_support2_GAMAtt2_ga2m_s33_nl2_nt2000_td2_d6_od0.1_ld0.0_cs1.0_lr0.01_lo0_la0.0_pt0_pr0_mn0_ol0_ll0_da32' \
+'0518_adult_GAM_ga2m_s33_nl2_nt2000_td2_d6_od0.1_ld0.0_cs1.0_lr0.01_lo0_la0.0_pt0_pr0_mn0_ol0_ll1' \
+; do
+  postfix=${d:4}
+  for fold in '0' '1' '2' '3' '4'; do
+    ./my_sbatch --qos deadline --cpu 4 --gpus 1 --mem 8 python -u main.py --name 0528_f${fold}_best${postfix} --load_from_hparams ${d} --fold ${fold}
+  done
+done
+
+
+random_search='50'
+for dset in 'adult'; do
+  for arch in 'GAM'; do
+    python main.py --name 0518_${dset}_${arch}_ga2m --dataset ${dset} --random_search ${random_search} --cpu 4 --gpus 1 --mem 8 --fp16 1 --arch ${arch} --seed 48 --ga2m 1 --add_last_linear 1
+  done
+done
+
+random_search='50'
+for dset in 'mimic2'; do
+  for arch in 'GAMAtt2'; do
+    python main.py --name 0518_${dset}_${arch}_ga2m --dataset ${dset} --random_search ${random_search} --cpu 4 --gpus 1 --mem 8 --fp16 1 --arch ${arch} --seed 36 --ga2m 1 --add_last_linear 0
+  done
+done
+
+
+# Maybe adult GAM ga2m will get last linear as 0 is best??? No!
+random_search='30'
+for dset in 'adult'; do
+  for arch in 'GAM'; do
+    python main.py --name 0518_${dset}_${arch}_ga2m --dataset ${dset} --random_search ${random_search} --cpu 4 --gpus 1 --mem 8 --fp16 1 --arch ${arch} --seed 36 --ga2m 1 --add_last_linear 0
+  done
+done
+
+
+# New best for mimic2!! (A bit cheating!!)
+for d in \
+'0518_mimic2_GAMAtt2_ga2m_s97_nl3_nt1333_td0_d4_od0.1_ld0.0_cs0.2_lr0.01_lo0_la1e-06_pt0_pr0_mn0_ol0_ll0_da32' \
+; do
+  postfix=${d:4}
+  for fold in '0' '1' '2' '3' '4'; do
+    ./my_sbatch --qos deadline --cpu 4 --gpus 1 --mem 8 python -u main.py --name 0528_f${fold}_best${postfix} --load_from_hparams ${d} --fold ${fold}
+  done
+done
+
+random_search='60'
+for dset in 'mimic2'; do
+  for arch in 'GAM' 'GAMAtt'; do
+    add_last_linear='0'
+    if [[ "${arch}" == "GAM" ]]; then
+      add_last_linear='1'
+    fi
+    python main.py --name 0527_${dset}_${arch} --dataset ${dset} --random_search ${random_search} --cpu 4 --gpus 1 --mem 8 --fp16 1 --arch ${arch} --seed 26 --add_last_linear ${add_last_linear}
+  done
+done
+
+
+for dset in 'bikeshare' 'adult' 'compas' 'churn' 'credit' 'mimic2' 'mimic3' 'wine' 'support2'; do
+  model_name="rf"
+  for fold in '0' '1' '2' '3' '4'; do
+    ./my_sbatch --cpu 10 --gpus 0 --mem 40 -p cpu python -u baselines.py --name 0308_${dset}_${model_name}_f${fold} --dataset ${dset} --model_name ${model_name} --fold ${fold}
+    done
+done
+
+
+
+
+
+# Rerun the best model among all datasets
+for fold in '0' '1' '2' '3' '4'; do
+  for d in \
+"0514_f${fold}_best_mimic2_GAMAtt_entm1_s89_nl5_nt400_td0_d4_od0.2_ld0.3_cs0.5_lr0.01_lo0_la1e-07_pt0_pr0_mn0_ol0_ll0_da8" \
+"0413_f${fold}_best_adult_GAM_lastl_s46_nl3_nt666_td1_d4_od0.1_cs0.5_lr0.01_lo0_la0.0" \
+"0502_f${fold}_best_f0_best_mimic3_GAM_s97_nl3_nt1333_td0_d6_od0.2_cs1e-05_lr0.005_lo0_la1e-07" \
+"0502_f${fold}_best_compas_GAMAtt2_s67_nl5_nt800_td2_d4_od0.3_cs0.5_lr0.01_lo0_la1e-05_pt0_pr0_mn0_ol0_da16_ll1" \
+"0502_f${fold}_best_churn_GAMAtt2_s48_nl3_nt166_td2_d4_od0.1_cs0.5_lr0.005_lo0_la1e-05_pt0_pr0_mn0_da8_ll1" \
+"0502_f${fold}_best_f0_best_credit_GAMAtt2_s87_nl5_nt400_td2_d2_od0.2_cs0.1_lr0.01_lo0_la0.0_da8_ll1" \
+"0420_support2_f${fold}_best" \
+"0420_wine_f${fold}_best" \
+"0525_f${fold}_best_bikeshare_GAM_s55_nl2_nt250_td1_d2_od0.2_ld0.3_cs0.5_lr0.005_lo0_la1e-07_pt0_pr0_mn0_ol0_ll1" \
+; do
+  postfix=${d:4}
+  ./my_sbatch --cpu 4 --gpus 1 --mem 8 python -u main.py --name 0530_f${fold}_best${postfix} --load_from_hparams ${d} --fold ${fold}
+done
+done
+
+
+#### Check if epsilon would work. And search more GA2M on click, yahoo, year, epsilon. Check if these improve performance
+random_search='30'
+for dset in 'click' 'yahoo' 'epsilon' 'year'; do
+  selectors_detach='0'
+  if [[ "${dset}" == "epsilon" ]]; then
+      selectors_detach='1'
+  fi
+  add_last_linear='1'
+  if [[ "${dset}" == "click" ]]; then
+      add_last_linear='0'
+  fi
+  for arch in 'GAMAtt3'; do
+    python main.py --name 0518_${dset}_${arch}_ga2m --dataset ${dset} --random_search ${random_search} --cpu 4 --gpus 1 --mem 8 --fp16 1 --arch ${arch} --seed 36 --ga2m 1 --selectors_detach ${selectors_detach} --add_last_linear ${add_last_linear}
+  done
+done
+
+
+date
+0531   -0.831800
+0532   -0.830065
+0533   -0.832476
+# Honest MIMIC2: 0531,0532. Not-honest MIMIC2: 0533. Wait to see what to show for MIMIC2 main
+#'0527_mimic2_GAM_s81_nl2_nt500_td1_d2_od0.1_ld0.1_cs1e-05_lr0.005_lo0_la1e-05_pt0_pr0_mn0_ol0_ll1' \
+'0527_mimic2_GAM_s48_nl4_nt1000_td2_d4_od0.0_ld0.2_cs0.5_lr0.01_lo0_la0.0_pt0_pr0_mn0_ol0_ll1' \
+'0527_mimic2_GAMAtt_s84_nl2_nt500_td2_d6_od0.2_ld0.0_cs1e-05_lr0.005_lo0_la1e-06_pt0_pr0_mn0_ol0_ll0_da8' \
+for d in \
+'0527_mimic2_GAMAtt_s99_nl4_nt500_td1_d4_od0.0_ld0.0_cs0.5_lr0.01_lo0_la1e-07_pt0_pr0_mn0_ol0_ll0_da32' \
+; do
+  postfix=${d:4}
+  for fold in '0' '1' '2' '3' '4'; do
+#    ./my_sbatch --qos deadline --cpu 4 --gpus 1 --mem 8 python -u main.py --name 0531_f${fold}_best${postfix} --load_from_hparams ${d} --fold ${fold}
+#    ./my_sbatch --qos deadline --cpu 4 --gpus 1 --mem 8 python -u main.py --name 0532_f${fold}_best${postfix} --load_from_hparams ${d} --fold ${fold}
+    ./my_sbatch --cpu 4 --gpus 1 --mem 8 python -u main.py --name 0533_f${fold}_best${postfix} --load_from_hparams ${d} --fold ${fold}
+  done
+done
+
+
+for dset in 'year' 'yahoo' 'microsoft' 'higgs' 'epsilon' 'click'; do
+  model_name="rf"
+  ./my_sbatch --cpu 20 --gpus 0 --mem 80 -p cpu python -u baselines.py --name 0308_${dset}_${model_name} --dataset ${dset} --model_name ${model_name}
+done
+
+for dset in 'year' 'yahoo' 'microsoft' 'higgs' 'epsilon' 'click'; do
+./my_sbatch --cpu 8 --gpus 1 --mem 16 --qos deadline --name cache_${dset}2 python -u recheck_results.py --dataset ${dset}
+done
+
+for dset in 'yahoo' 'epsilon'; do
+./my_sbatch --cpu 8 --gpus 1 --mem 24 --qos deadline --name cache_${dset}2 python -u recheck_results.py --dataset ${dset}
+done
+
+for dset in 'click'; do
+./my_sbatch --cpu 8 --gpus 1 --mem 24 --qos deadline --name cache_${dset}2 python -u recheck_results.py --dataset ${dset}
+done
+
+for dset in 'yahoo' 'epsilon'; do
+./my_sbatch --cpu 20 --gpus 0 --mem 80 --qos deadline -p cpu --name cache_${dset}2 python -u recheck_results.py --dataset ${dset}
+done
+
+
+
+############ RUNNING
+random_search='50'
+for dset in 'click' 'yahoo' 'epsilon' 'year' 'microsoft' 'higgs'; do
+  selectors_detach='0'
+  if [[ "${dset}" == "epsilon" ]]; then
+      selectors_detach='1'
+  fi
+  add_last_linear='1'
+  for arch in 'GAMAtt2'; do
+    python main.py --name 0518_${dset}_${arch}_ga2m --dataset ${dset} --random_search ${random_search} --cpu 4 --gpus 1 --mem 8 --fp16 1 --arch ${arch} --seed 33 --ga2m 1 --selectors_detach ${selectors_detach} --add_last_linear ${add_last_linear}
+  done
+done
+
+
+random_search='50'
+for dset in 'click' 'yahoo' 'epsilon' 'year' 'microsoft' 'higgs'; do
+  selectors_detach='0'
+  if [[ "${dset}" == "epsilon" ]]; then
+      selectors_detach='1'
+  fi
+  add_last_linear='1'
+  for arch in 'GAMAtt2'; do
+    python main.py --name 0532_${dset}_${arch} --dataset ${dset} --random_search ${random_search} --cpu 4 --gpus 1 --mem 8 --fp16 1 --arch ${arch} --seed 56 --ga2m 0 --selectors_detach ${selectors_detach} --add_last_linear ${add_last_linear}
+  done
+done
+
+
+for d in \
+'0533_mimic2_ODST_s75_nl3_nt333_td2_d6_od0.1_cs0.2_lr0.005_la1e-05_ll0_ld0.0' \
+'0533_mimic3_ODST_s46_nl2_nt1000_td1_d6_od0.2_cs0.2_lr0.005_la1e-06_ll0_ld0.0' \
+'0533_churn_ODST_s26_nl4_nt125_td0_d2_od0.0_cs0.5_lr0.005_la1e-05_ll0_ld0.0' \
+'0533_support2_ODST_s35_nl5_nt100_td1_d4_od0.1_cs0.2_lr0.01_la1e-05_ll0_ld0.0' \
+; do
+  postfix=${d:4}
+  for fold in '0' '1' '2' '3' '4'; do
+    ./my_sbatch --cpu 4 --gpus 1 --mem 8 python -u main.py --name 0535_f${fold}_best${postfix} --load_from_hparams ${d} --fold ${fold}
+  done
+done
+
+
+# cal_prev_feat_weights
+
+
+############ TORUN
+
+
+
+
+# Run better ODST again on these 4 datasets to make them look better?
+random_search='10'
+for dset in 'churn' 'compas' 'adult' 'credit'; do
+  for arch in 'ODST'; do
+    python main.py --name 0533_${dset}_${arch} --dataset ${dset} --random_search ${random_search} --cpu 4 --gpus 1 --mem 8 --fp16 1 --arch ${arch} --seed 37
+  done
+done
+
+random_search='30'
+for dset in 'support2' 'mimic3' 'mimic2' 'bikeshare'; do
+  for arch in 'ODST'; do
+    python main.py --name 0533_${dset}_${arch} --dataset ${dset} --random_search ${random_search} --cpu 4 --gpus 1 --mem 8 --fp16 1 --arch ${arch} --seed 37
+  done
+done
+
+
+
+
+############ Paper writing
+Main
+(1) Wait all ODST random search. After they finish, see which is the best and run. Update hyperparameters.
+
+Supplementary
+(3) Plot the GA2M like Fig.1
+(4) Complete set of plots from datasets
+(1) Purification pseudo-code? Maybe borrow from Ben?
+
+
+
+
+********* MIMIC2 GAM is a fake one! only 0.825
+********* Re-check all the best GAM model; do they perform exactly as reported? Like MIMIC2 is not!!
+- Most of them are deleted! So let me rerun the best val MIMIC2?
+
 
 
 Self-supervision / Pretraining: (RUNNING!!)
@@ -1657,36 +2556,6 @@ Thoughts:
 All rerun is bigger than 2763897
 
 for d in \
-'0421_higgs_GAMAtt2_ds500_s11_nl5_nt800_td1_d2_od0.2_ld0.1_cs1e-05_lr0.005_lo0_la1e-06_pt2_pr0.15_mn0.1_ol0_ll1_da32_pt0' \
-'0421_higgs_GAMAtt2_ds500_s13_nl4_nt125_td0_d2_od0.2_ld0.1_cs0.1_lr0.005_lo0_la1e-05_pt2_pr0.15_mn0.1_ol0_ll1_da32_pt0' \
-'0421_higgs_GAMAtt2_ds500_s15_nl4_nt500_td1_d4_od0.1_ld0.0_cs0.1_lr0.01_lo0_la1e-05_pt2_pr0.15_mn0.1_ol0_ll1_da32_pt0' \
-'0421_higgs_GAMAtt2_ds500_s1_nl4_nt250_td2_d2_od0.1_ld0.1_cs0.1_lr0.005_lo0_la1e-06_pt2_pr0.15_mn0.1_ol0_ll1_da32_pt0' \
-'0421_higgs_GAMAtt2_ds500_s21_nl2_nt250_td2_d2_od0.1_ld0.1_cs0.5_lr0.005_lo0_la1e-06_pt2_pr0.3_mn0.1_ol1_ll1_da32_pt0' \
-'0421_higgs_GAMAtt2_ds500_s22_nl5_nt400_td0_d2_od0.1_ld0.0_cs0.5_lr0.01_lo0_la1e-07_pt2_pr0.5_mn0.1_ol1_ll1_da8_pt0' \
-'0421_higgs_GAMAtt2_ds500_s32_nl4_nt500_td2_d2_od0.0_ld0.0_cs1e-05_lr0.01_lo0_la1e-06_pt2_pr0.5_mn0.1_ol0_ll1_da8_pt0' \
-'0421_higgs_GAMAtt2_ds500_s36_nl2_nt250_td0_d2_od0.1_ld0.0_cs0.5_lr0.01_lo0_la1e-07_pt2_pr0.15_mn0.1_ol0_ll1_da8_pt0' \
-'0421_higgs_GAMAtt2_ds500_s37_nl5_nt100_td1_d4_od0.2_ld0.1_cs0.5_lr0.01_lo0_la1e-05_pt2_pr0.5_mn0.1_ol0_ll1_da16_pt0' \
-'0421_higgs_GAMAtt2_ds500_s45_nl5_nt200_td2_d2_od0.1_ld0.0_cs0.5_lr0.005_lo0_la1e-06_pt2_pr0.3_mn0.1_ol1_ll1_da8_pt0' \
-'0421_higgs_GAMAtt2_ds500_s46_nl5_nt400_td2_d2_od0.1_ld0.1_cs0.1_lr0.005_lo0_la1e-07_pt2_pr0.5_mn0.1_ol1_ll1_da8_pt0' \
-'0421_higgs_GAMAtt2_ds500_s49_nl2_nt2000_td2_d4_od0.2_ld0.0_cs1e-05_lr0.005_lo0_la0.0_pt2_pr0.5_mn0.1_ol1_ll1_da8_pt0' \
-'0421_higgs_GAMAtt2_ds500_s51_nl5_nt200_td0_d4_od0.0_ld0.0_cs1e-05_lr0.005_lo0_la1e-07_pt2_pr0.3_mn0.1_ol1_ll1_da16_pt0' \
-'0421_higgs_GAMAtt2_ds500_s56_nl3_nt666_td0_d4_od0.0_ld0.1_cs0.5_lr0.01_lo0_la1e-05_pt2_pr0.3_mn0.1_ol0_ll1_da8_pt0' \
-'0421_higgs_GAMAtt2_ds500_s59_nl3_nt1333_td0_d6_od0.0_ld0.1_cs0.1_lr0.01_lo0_la1e-07_pt2_pr0.15_mn0.1_ol1_ll1_da32_pt0' \
-'0421_higgs_GAMAtt2_ds500_s61_nl4_nt500_td1_d4_od0.1_ld0.1_cs0.5_lr0.005_lo0_la1e-05_pt2_pr0.3_mn0.1_ol1_ll1_da8_pt0' \
-'0421_higgs_GAMAtt2_ds500_s6_nl5_nt400_td0_d6_od0.2_ld0.0_cs0.1_lr0.005_lo0_la1e-07_pt2_pr0.5_mn0.1_ol0_ll1_da8_pt0' \
-'0421_higgs_GAMAtt2_ds500_s71_nl4_nt125_td0_d6_od0.0_ld0.1_cs1e-05_lr0.01_lo0_la1e-05_pt2_pr0.5_mn0.1_ol0_ll1_da16_pt0' \
-'0421_higgs_GAMAtt2_ds500_s76_nl3_nt1333_td0_d4_od0.1_ld0.1_cs0.1_lr0.01_lo0_la1e-05_pt2_pr0.15_mn0.1_ol0_ll1_da16_pt0' \
-'0421_higgs_GAMAtt2_ds500_s7_nl3_nt666_td2_d6_od0.2_ld0.0_cs1e-05_lr0.005_lo0_la1e-07_pt2_pr0.15_mn0.1_ol0_ll1_da16_pt0' \
-'0421_higgs_GAMAtt2_ds500_s83_nl5_nt400_td2_d2_od0.0_ld0.0_cs0.1_lr0.01_lo0_la1e-07_pt2_pr0.15_mn0.1_ol0_ll1_da16_pt0' \
-'0421_higgs_GAMAtt2_ds500_s84_nl2_nt2000_td2_d4_od0.2_ld0.0_cs0.1_lr0.01_lo0_la1e-06_pt2_pr0.3_mn0.1_ol1_ll1_da8_pt0' \
-'0421_higgs_GAMAtt2_ds500_s86_nl3_nt1333_td1_d2_od0.2_ld0.1_cs1e-05_lr0.005_lo0_la0.0_pt2_pr0.3_mn0.1_ol0_ll1_da8_pt0' \
-'0421_higgs_GAMAtt2_ds500_s89_nl4_nt250_td2_d4_od0.0_ld0.0_cs0.5_lr0.01_lo0_la0.0_pt2_pr0.3_mn0.1_ol0_ll1_da8_pt0' \
-'0421_higgs_GAMAtt2_ds500_s8_nl4_nt500_td0_d2_od0.2_ld0.0_cs0.5_lr0.005_lo0_la1e-05_pt2_pr0.3_mn0.1_ol1_ll1_da32_pt0' \
-'0421_higgs_GAMAtt2_ds500_s92_nl2_nt250_td0_d6_od0.0_ld0.0_cs0.1_lr0.01_lo0_la0.0_pt2_pr0.3_mn0.1_ol1_ll1_da8_pt0' \
-'0421_higgs_GAMAtt2_ds500_s94_nl5_nt200_td0_d4_od0.1_ld0.0_cs0.5_lr0.01_lo0_la1e-06_pt2_pr0.15_mn0.1_ol1_ll1_da16_pt0' \
-'0421_higgs_GAMAtt2_ds500_s96_nl2_nt2000_td1_d4_od0.1_ld0.0_cs0.5_lr0.01_lo0_la0.0_pt2_pr0.15_mn0.1_ol1_ll1_da8_pt0' \
-'0421_higgs_GAMAtt2_ds500_s97_nl2_nt1000_td0_d6_od0.0_ld0.1_cs1e-05_lr0.005_lo0_la0.0_pt2_pr0.15_mn0.1_ol0_ll1_da8_pt0' \
-'0421_higgs_GAMAtt2_ds500_s9_nl3_nt666_td2_d6_od0.0_ld0.1_cs1e-05_lr0.01_lo0_la1e-05_pt2_pr0.3_mn0.1_ol1_ll1_da32_pt0' \
 ; do
   load_from_hparams=${d:0:-4} # Remove directory name
   echo ${load_from_hparams}
@@ -1694,86 +2563,24 @@ for d in \
 #  ./my_sbatch --cpu 4 --gpus 1 --mem 8 python -u main.py --name ${d}
 done
 
-for dset in 'rossmann'; do
-  for arch in 'GAM' 'GAMAtt' 'GAMAtt2'; do
-    python main.py --name 0424_${dset}_${arch} --dataset ${dset} --random_search 25 --cpu 4 --gpus 1 --mem 8 --fp16 1 --arch ${arch}
-  done
-done
-
-
 for d in \
-'0506_rossmann_GAMAtt_s96_nl3_nt666_td1_d6_od0.0_ld0.1_cs1e-05_lr0.005_lo0_la0.0_pt2_pr0.15_mn0.1_ol0_ll1_da32_fds0.05_flr0.0001_frs1000_ft' \
+'0521_f4_best_compas_ODST_s3_nl5_nt100_td1_d2_od0.0_cs0.2_lr0.005_la0.0_ll0_ld0.0' \
+'0521_f1_best_credit_ODST_s87_nl3_nt166_td0_d6_od0.0_cs0.2_lr0.01_la1e-07_ll1_ld0.2' \
 ; do
   ./my_sbatch --cpu 4 --gpus 1 --mem 8 python -u main.py --name ${d}
 done
 
 
 for d in \
-'0428_higgs_GAMAtt2_ds5000_s13_nl2_nt1000_td2_d6_od0.1_ld0.0_cs0.1_lr0.005_lo0_la1e-06_pt2_pr0.1_mn0.1_ol0_ll1_da32_pt0' \
-'0428_higgs_GAMAtt2_ds5000_s14_nl5_nt800_td1_d6_od0.1_ld0.1_cs1e-05_lr0.01_lo0_la1e-07_pt2_pr0.15_mn0.1_ol0_ll1_da8_pt0' \
-'0428_higgs_GAMAtt2_ds5000_s15_nl3_nt666_td2_d4_od0.2_ld0.2_cs0.5_lr0.01_lo0_la1e-05_pt2_pr0.1_mn0.1_ol0_ll1_da32_pt0' \
-'0428_higgs_GAMAtt2_ds5000_s43_nl5_nt400_td0_d4_od0.0_ld0.0_cs0.1_lr0.01_lo0_la0.0_pt2_pr0.15_mn0.1_ol0_ll1_da16_pt0' \
-'0428_higgs_GAMAtt2_ds5000_s57_nl3_nt1333_td0_d2_od0.2_ld0.1_cs0.1_lr0.005_lo0_la1e-06_pt2_pr0.2_mn0.1_ol0_ll1_da16_pt0' \
-'0428_higgs_GAMAtt2_ds5000_s5_nl2_nt2000_td0_d2_od0.2_ld0.0_cs1e-05_lr0.01_lo0_la1e-05_pt2_pr0.15_mn0.1_ol0_ll1_da8_pt0' \
-'0428_higgs_GAMAtt2_ds5000_s5_nl3_nt1333_td0_d2_od0.2_ld0.2_cs1e-05_lr0.01_lo0_la1e-07_pt2_pr0.1_mn0.1_ol0_ll1_da32_pt0' \
-'0428_higgs_GAMAtt2_ds5000_s62_nl3_nt166_td0_d6_od0.1_ld0.3_cs1e-05_lr0.005_lo0_la1e-06_pt2_pr0.15_mn0.1_ol0_ll1_da16_pt0' \
-'0428_higgs_GAMAtt2_ds5000_s67_nl4_nt1000_td2_d6_od0.2_ld0.1_cs1e-05_lr0.005_lo0_la1e-05_pt2_pr0.15_mn0.1_ol0_ll1_da16_p+' \
-'0428_higgs_GAMAtt2_ds5000_s71_nl2_nt2000_td1_d6_od0.0_ld0.1_cs0.5_lr0.01_lo0_la1e-05_pt2_pr0.1_mn0.1_ol0_ll1_da8_pt0' \
-'0428_higgs_GAMAtt2_ds5000_s75_nl3_nt1333_td2_d4_od0.1_ld0.1_cs0.5_lr0.01_lo0_la1e-06_pt2_pr0.15_mn0.1_ol0_ll1_da8_pt0' \
-'0428_higgs_GAMAtt2_ds5000_s81_nl3_nt166_td1_d6_od0.0_ld0.2_cs1e-05_lr0.005_lo0_la1e-06_pt2_pr0.1_mn0.1_ol0_ll1_da8_pt0' \
-'0427_higgs_GAMAtt2_ds2000_s71_nl2_nt2000_td1_d6_od0.0_ld0.1_cs0.5_lr0.01_lo0_la1e-05_pt2_pr0.1_mn0.1_ol0_ll1_da8_ft' \
-'0423_sarcos_ds5000_GAMAtt2_s40_nl3_nt666_td2_d2_od0.1_ld0.0_cs1e-05_lr0.01_lo0_la1e-07_pt0_pr0_mn0_ol0_ll0_da16' \
-'0423_sarcos_ds5000_GAMAtt2_s75_nl3_nt333_td1_d6_od0.2_ld0.0_cs1e-05_lr0.005_lo0_la1e-07_pt0_pr0_mn0_ol0_ll1_da32' \
-'0423_sarcos_ds5000_GAMAtt2_s3_nl3_nt333_td1_d2_od0.0_ld0.2_cs1e-05_lr0.005_lo0_la0.0_pt0_pr0_mn0_ol0_ll1_da32' \
-'0423_sarcos_ds5000_GAMAtt2_s29_nl3_nt666_td2_d2_od0.2_ld0.1_cs0.1_lr0.01_lo0_la1e-07_pt0_pr0_mn0_ol0_ll0_da32' \
-'0423_sarcos_ds5000_GAMAtt2_s78_nl5_nt400_td2_d4_od0.1_ld0.2_cs0.1_lr0.01_lo0_la1e-07_pt0_pr0_mn0_ol0_ll0_da8' \
-'0423_sarcos_ds5000_GAMAtt2_s84_nl5_nt800_td2_d2_od0.0_ld0.0_cs1e-05_lr0.01_lo0_la0.0_pt0_pr0_mn0_ol0_ll0_da8' \
-'0423_sarcos_ds5000_GAMAtt2_s95_nl3_nt666_td2_d4_od0.0_ld0.0_cs0.5_lr0.005_lo0_la1e-05_pt0_pr0_mn0_ol0_ll0_da8' \
-'0423_sarcos_ds5000_GAMAtt2_s78_nl5_nt400_td1_d4_od0.2_ld0.0_cs1e-05_lr0.005_lo0_la1e-06_pt0_pr0_mn0_ol0_ll1_da32' \
-'0423_sarcos_ds5000_GAMAtt2_s9_nl4_nt1000_td0_d2_od0.2_ld0.3_cs1e-05_lr0.005_lo0_la1e-07_pt0_pr0_mn0_ol0_ll0_da32' \
-'0423_sarcos_ds5000_GAMAtt2_s0_nl4_nt500_td1_d2_od0.2_ld0.1_cs0.1_lr0.01_lo0_la1e-05_pt0_pr0_mn0_ol0_ll1_da16' \
-'0423_sarcos0_ds5000_GAMAtt2_s40_nl3_nt666_td2_d2_od0.1_ld0.0_cs1e-05_lr0.01_lo0_la1e-07_pt0_pr0_mn0_ol0_ll0_da16' \
-'0423_sarcos0_ds5000_GAMAtt2_s7_nl3_nt1333_td2_d6_od0.2_ld0.0_cs0.1_lr0.005_lo0_la1e-07_pt0_pr0_mn0_ol0_ll1_da32' \
-'0423_sarcos0_ds5000_GAMAtt2_s75_nl3_nt333_td1_d6_od0.2_ld0.0_cs1e-05_lr0.005_lo0_la1e-07_pt0_pr0_mn0_ol0_ll1_da32' \
-'0423_sarcos0_ds5000_GAMAtt2_s29_nl3_nt666_td2_d2_od0.2_ld0.1_cs0.1_lr0.01_lo0_la1e-07_pt0_pr0_mn0_ol0_ll0_da32' \
-'0423_sarcos0_ds5000_GAMAtt2_s70_nl3_nt166_td2_d6_od0.0_ld0.0_cs0.5_lr0.01_lo0_la1e-07_pt0_pr0_mn0_ol0_ll1_da32' \
-'0423_sarcos0_ds5000_GAMAtt2_s78_nl5_nt400_td2_d4_od0.1_ld0.2_cs0.1_lr0.01_lo0_la1e-07_pt0_pr0_mn0_ol0_ll0_da8' \
-'0423_sarcos0_ds5000_GAMAtt2_s84_nl5_nt800_td2_d2_od0.0_ld0.0_cs1e-05_lr0.01_lo0_la0.0_pt0_pr0_mn0_ol0_ll0_da8' \
-'0423_sarcos0_ds5000_GAMAtt2_s78_nl5_nt400_td1_d4_od0.2_ld0.0_cs1e-05_lr0.005_lo0_la1e-06_pt0_pr0_mn0_ol0_ll1_da32' \
-'0423_sarcos0_ds5000_GAMAtt2_s9_nl4_nt1000_td0_d2_od0.2_ld0.3_cs1e-05_lr0.005_lo0_la1e-07_pt0_pr0_mn0_ol0_ll0_da32' \
-'0423_sarcos0_ds5000_GAMAtt2_s69_nl4_nt250_td1_d4_od0.0_ld0.0_cs0.1_lr0.01_lo0_la1e-06_pt0_pr0_mn0_ol0_ll1_da16' \
-'0423_sarcos0_ds5000_GAMAtt2_s0_nl4_nt500_td1_d2_od0.2_ld0.1_cs0.1_lr0.01_lo0_la1e-05_pt0_pr0_mn0_ol0_ll1_da16' \
-'0423_sarcos1_ds5000_GAMAtt2_s99_nl4_nt1000_td0_d6_od0.1_ld0.0_cs1e-05_lr0.005_lo0_la1e-07_pt0_pr0_mn0_ol0_ll0_da32' \
-'0423_sarcos1_ds5000_GAMAtt2_s40_nl3_nt666_td2_d2_od0.1_ld0.0_cs1e-05_lr0.01_lo0_la1e-07_pt0_pr0_mn0_ol0_ll0_da16' \
-'0423_sarcos1_ds5000_GAMAtt2_s7_nl3_nt1333_td2_d6_od0.2_ld0.0_cs0.1_lr0.005_lo0_la1e-07_pt0_pr0_mn0_ol0_ll1_da32' \
-'0423_sarcos1_ds5000_GAMAtt2_s75_nl3_nt333_td1_d6_od0.2_ld0.0_cs1e-05_lr0.005_lo0_la1e-07_pt0_pr0_mn0_ol0_ll1_da32' \
-'0423_sarcos1_ds5000_GAMAtt2_s78_nl5_nt400_td2_d4_od0.1_ld0.2_cs0.1_lr0.01_lo0_la1e-07_pt0_pr0_mn0_ol0_ll0_da8' \
-'0423_sarcos1_ds5000_GAMAtt2_s84_nl5_nt800_td2_d2_od0.0_ld0.0_cs1e-05_lr0.01_lo0_la0.0_pt0_pr0_mn0_ol0_ll0_da8' \
-'0423_sarcos1_ds5000_GAMAtt2_s95_nl3_nt666_td2_d4_od0.0_ld0.0_cs0.5_lr0.005_lo0_la1e-05_pt0_pr0_mn0_ol0_ll0_da8' \
-'0423_sarcos1_ds5000_GAMAtt2_s78_nl5_nt400_td1_d4_od0.2_ld0.0_cs1e-05_lr0.005_lo0_la1e-06_pt0_pr0_mn0_ol0_ll1_da32' \
-'0423_sarcos1_ds5000_GAMAtt2_s9_nl4_nt1000_td0_d2_od0.2_ld0.3_cs1e-05_lr0.005_lo0_la1e-07_pt0_pr0_mn0_ol0_ll0_da32' \
-'0423_sarcos1_ds5000_GAMAtt2_s69_nl4_nt250_td1_d4_od0.0_ld0.0_cs0.1_lr0.01_lo0_la1e-06_pt0_pr0_mn0_ol0_ll1_da16' \
-'0423_sarcos1_ds5000_GAMAtt2_s66_nl5_nt200_td2_d4_od0.2_ld0.0_cs0.1_lr0.01_lo0_la1e-05_pt0_pr0_mn0_ol0_ll1_da16' \
-'0423_sarcos_ds5000_GAMAtt2_s99_nl4_nt1000_td0_d6_od0.1_ld0.0_cs1e-05_lr0.005_lo0_la1e-07_pt0_pr0_mn0_ol0_ll0_da32' \
-'0423_sarcos0_ds5000_GAMAtt2_s99_nl4_nt1000_td0_d6_od0.1_ld0.0_cs1e-05_lr0.005_lo0_la1e-07_pt0_pr0_mn0_ol0_ll0_da32' \
-'0423_sarcos_ds5000_GAMAtt2_s7_nl3_nt1333_td2_d6_od0.2_ld0.0_cs0.1_lr0.005_lo0_la1e-07_pt0_pr0_mn0_ol0_ll1_da32' \
-'0427_higgs_GAMAtt2_ds2000_s67_nl4_nt1000_td2_d6_od0.2_ld0.1_cs1e-05_lr0.005_lo0_la1e-05_pt2_pr0.15_mn0.1_ol0_ll1_da16' \
-'0428_higgs_GAMAtt2_ds5000_s75_nl3_nt1333_td2_d4_od0.1_ld0.1_cs0.5_lr0.01_lo0_la1e-06_pt2_pr0.15_mn0.1_ol0_ll1_da8_ft' \
-'0427_higgs_GAMAtt2_ds2000_s14_nl5_nt800_td1_d6_od0.1_ld0.1_cs1e-05_lr0.01_lo0_la1e-07_pt2_pr0.15_mn0.1_ol0_ll1_da8_ft' \
-'0427_higgs_GAMAtt2_ds2000_s67_nl4_nt1000_td2_d6_od0.2_ld0.1_cs1e-05_lr0.005_lo0_la1e-05_pt2_pr0.15_mn0.1_ol0_ll1_da16_ft' \
-
+'0516_f2_support2_GAMAtt_s44_nl3_nt1333_td1_d4_od0.1_ld0.0_cs0.5_lr0.01_lo0_la1e-05_pt3_pr0.15_mn0.1_ol0_ll1_da16_fds0.005_flr0.0003_frs500_ft' \
 ; do
   ./my_sbatch --cpu 4 --gpus 1 --mem 8 python -u main.py --name ${d}
 done
 
 for d in \
-'0428_higgs_GAMAtt2_ds5000_s14_nl5_nt800_td1_d6_od0.1_ld0.1_cs1e-05_lr0.01_lo0_la1e-07_pt2_pr0.15_mn0.1_ol0_ll1_da8_pt0' \
-'0428_higgs_GAMAtt2_ds5000_s15_nl3_nt666_td2_d4_od0.2_ld0.2_cs0.5_lr0.01_lo0_la1e-05_pt2_pr0.1_mn0.1_ol0_ll1_da32_pt0' \
-'0428_higgs_GAMAtt2_ds5000_s5_nl2_nt2000_td0_d2_od0.2_ld0.0_cs1e-05_lr0.01_lo0_la1e-05_pt2_pr0.15_mn0.1_ol0_ll1_da8_pt0' \
-'0428_higgs_GAMAtt2_ds5000_s81_nl3_nt166_td1_d6_od0.0_ld0.2_cs1e-05_lr0.005_lo0_la1e-06_pt2_pr0.1_mn0.1_ol0_ll1_da8_pt0' \
-'0423_sarcos_ds5000_GAMAtt2_s40_nl3_nt666_td2_d2_od0.1_ld0.0_cs1e-05_lr0.01_lo0_la1e-07_pt0_pr0_mn0_ol0_ll0_da16' \
-'0423_sarcos_ds5000_GAMAtt2_s75_nl3_nt333_td1_d6_od0.2_ld0.0_cs1e-05_lr0.005_lo0_la1e-07_pt0_pr0_mn0_ol0_ll1_da32' \
-'0423_sarcos_ds5000_GAMAtt2_s3_nl3_nt333_td1_d2_od0.0_ld0.2_cs1e-05_lr0.005_lo0_la0.0_pt0_pr0_mn0_ol0_ll1_da32' \
+'0516_f2_adult_GAMAtt_s76_nl2_nt1000_td2_d6_od0.1_ld0.0_cs1e-05_lr0.005_lo0_la0.0_pt3_pr0.15_mn0.1_ol0_ll1_da8_fds0.1_flr0.0003_frs500_ft' \
+'0516_f2_mimic3_GAMAtt_s13_nl4_nt250_td0_d4_od0.2_ld0.3_cs1e-05_lr0.005_lo0_la1e-05_pt3_pr0.15_mn0.1_ol0_ll1_da16_fds0.05_flr0.0005_frs500_ft' \
+'0516_f2_adult_GAMAtt_s76_nl2_nt1000_td2_d6_od0.1_ld0.0_cs1e-05_lr0.005_lo0_la0.0_pt3_pr0.15_mn0.1_ol0_ll1_da8_fds0.1_flr5e-05_frs500_ft' \
 ; do
   ./my_sbatch --cpu 4 --gpus 1 --mem 8 python -u main.py --name ${d}
 done
@@ -1849,22 +2656,14 @@ done
 # Check after 2778383
 
 for d in \
-'0510_yahoo_GAMAtt_s80_nl5_nt400_td1_d2_od0.1_ld0.0_cs0.1_lr0.005_lo0_la1e-05_pt2_pr0.25_mn0.1_ol0_ll1_da16_fds0.0005_flr0.0005_frs500_ft' \
-'0510_yahoo_GAMAtt_s80_nl5_nt400_td1_d2_od0.1_ld0.0_cs0.1_lr0.005_lo0_la1e-05_pt2_pr0.3_mn0.1_ol0_ll1_da16_fds0.0002_flr0.0005_frs1000_ft' \
-'0510_yahoo_GAMAtt_s54_nl2_nt2000_td1_d4_od0.2_ld0.2_cs1e-05_lr0.005_lo0_la0.0_pt2_pr0.1_mn0.1_ol0_ll1_da32_fds0.0005_flr0.0001_frs1000_ft' \
-'0510_yahoo_GAMAtt_s54_nl2_nt2000_td1_d4_od0.2_ld0.2_cs1e-05_lr0.005_lo0_la0.0_pt2_pr0.25_mn0.1_ol0_ll1_da32_fds0.0002_flr0.0005_frs1000_ft' \
-'0510_microsoft_GAMAtt_s56_nl2_nt2000_td1_d4_od0.0_ld0.0_cs1e-05_lr0.01_lo0_la0.0_pt2_pr0.1_mn0.1_ol0_ll1_da32_fds0.0002_flr0.0001_frs500_ft' \
-'0510_microsoft_GAMAtt_s56_nl2_nt2000_td1_d4_od0.0_ld0.0_cs1e-05_lr0.01_lo0_la0.0_pt2_pr0.3_mn0.1_ol0_ll1_da32_fds0.0002_flr0.0005_frs1000_ft' \
-'0510_microsoft_GAMAtt_s56_nl2_nt2000_td1_d4_od0.0_ld0.0_cs1e-05_lr0.01_lo0_la0.0_pt2_pr0.25_mn0.1_ol0_ll1_da32_fds0.0005_flr0.0001_frs1000_ft' \
-'0510_yahoo_GAMAtt_s54_nl2_nt2000_td1_d4_od0.2_ld0.2_cs1e-05_lr0.005_lo0_la0.0_pt2_pr0.25_mn0.1_ol0_ll1_da32_fds0.0005_flr0.0001_frs500_ft' \
-'0510_yahoo_GAMAtt_s54_nl2_nt2000_td1_d4_od0.2_ld0.2_cs1e-05_lr0.005_lo0_la0.0_pt2_pr0.25_mn0.1_ol0_ll1_da32_fds0.0005_flr0.0003_frs1000_ft' \
-'0510_yahoo_GAMAtt_s54_nl2_nt2000_td1_d4_od0.2_ld0.2_cs1e-05_lr0.005_lo0_la0.0_pt2_pr0.1_mn0.1_ol0_ll1_da32_fds0.0005_flr0.0005_frs1000_ft' \
-'0510_yahoo_GAMAtt_s44_nl3_nt1333_td1_d4_od0.1_ld0.0_cs0.5_lr0.01_lo0_la1e-05_pt2_pr0.1_mn0.1_ol0_ll1_da16_fds0.0002_flr0.0003_frs1000_ft' \
-'0510_yahoo_GAMAtt_s56_nl2_nt2000_td1_d4_od0.0_ld0.0_cs1e-05_lr0.01_lo0_la0.0_pt2_pr0.2_mn0.1_ol0_ll1_da32_fds0.0002_flr0.0003_frs1000_ft' \
-'0510_yahoo_GAMAtt_s54_nl2_nt2000_td1_d4_od0.2_ld0.2_cs1e-05_lr0.005_lo0_la0.0_pt2_pr0.2_mn0.1_ol0_ll1_da32_fds0.0002_flr0.0005_frs500_ft' \
-'0510_yahoo_GAMAtt_s54_nl2_nt2000_td1_d4_od0.2_ld0.2_cs1e-05_lr0.005_lo0_la0.0_pt2_pr0.2_mn0.1_ol0_ll1_da32_fds0.0005_flr0.0005_frs1000_ft' \
-'0510_yahoo_GAMAtt_s54_nl2_nt2000_td1_d4_od0.2_ld0.2_cs1e-05_lr0.005_lo0_la0.0_pt2_pr0.15_mn0.1_ol0_ll1_da32_fds0.0002_flr0.0003_frs500_ft' \
-'0510_yahoo_GAMAtt_s54_nl2_nt2000_td1_d4_od0.2_ld0.2_cs1e-05_lr0.005_lo0_la0.0_pt2_pr0.25_mn0.1_ol0_ll1_da32_fds0.0002_flr0.0001_frs1000_ft' \
+'0510_higgs_GAMAtt_s76_nl2_nt1000_td2_d6_od0.1_ld0.0_cs1e-05_lr0.005_lo0_la0.0_pt2_pr0.2_mn0.1_ol0_ll1_da8' \
+'0510_higgs_GAMAtt_s13_nl4_nt250_td0_d4_od0.2_ld0.3_cs1e-05_lr0.005_lo0_la1e-05_pt2_pr0.2_mn0.1_ol0_ll1_da16' \
+'0510_higgs_GAMAtt_s44_nl3_nt1333_td1_d4_od0.1_ld0.0_cs0.5_lr0.01_lo0_la1e-05_pt2_pr0.2_mn0.1_ol0_ll1_da16' \
+'0510_higgs_GAMAtt_s54_nl2_nt2000_td1_d4_od0.2_ld0.2_cs1e-05_lr0.005_lo0_la0.0_pt2_pr0.2_mn0.1_ol0_ll1_da32' \
+'0510_higgs_GAMAtt_s49_nl3_nt166_td0_d4_od0.2_ld0.3_cs0.5_lr0.01_lo0_la1e-05_pt2_pr0.2_mn0.1_ol0_ll1_da16' \
+'0510_higgs_GAMAtt_s56_nl2_nt2000_td1_d4_od0.0_ld0.0_cs1e-05_lr0.01_lo0_la0.0_pt2_pr0.2_mn0.1_ol0_ll1_da32' \
+'0510_higgs_GAMAtt_s13_nl4_nt250_td0_d4_od0.2_ld0.3_cs1e-05_lr0.005_lo0_la1e-05_pt2_pr0.25_mn0.1_ol0_ll1_da16' \
+'0510_higgs_GAMAtt_s80_nl5_nt400_td1_d2_od0.1_ld0.0_cs0.1_lr0.005_lo0_la1e-05_pt2_pr0.25_mn0.1_ol0_ll1_da16' \
 ; do
   ./my_sbatch --cpu 4 --gpus 1 --mem 8 python -u main.py --name ${d}
 done

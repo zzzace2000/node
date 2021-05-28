@@ -11,7 +11,7 @@ import warnings
 
 from sklearn.model_selection import train_test_split
 
-from .utils import download
+from .utils import download, Timer
 from sklearn.datasets import load_svmlight_file
 from sklearn.preprocessing import QuantileTransformer, StandardScaler
 from sklearn.compose import ColumnTransformer
@@ -96,7 +96,7 @@ class MyPreprocessor:
             self.y_mu, self.y_std = y.mean(axis=0), y.std(axis=0)
             print("Normalize y. mean = {}, std = {}".format(self.y_mu, self.y_std))
 
-    def transform(self, *args, is_train=False):
+    def transform(self, *args):
         assert len(args) <= 2
 
         X = args[0]
@@ -107,11 +107,7 @@ class MyPreprocessor:
 
             for i, t in enumerate(self.transformers):
                 # Leave one out transform when it's training set
-                if self.cat_features is not None and is_train \
-                        and i == 0 and len(args) == 2:
-                    X = t.transform(X, args[1])
-                else:
-                    X = t.transform(X)
+                X = t.transform(X)
             # The LeaveOneOutEncoder makes it as np.float64 instead of 32
             X = X.astype(np.float32)
 
@@ -227,13 +223,13 @@ def fetch_EPSILON(path='./data/', train_size=None, valid_size=None, test_size=No
             with open(file_name, 'wb') as f:
                 f.write(zipfile.read())
 
-    print("reading dataset (it may take a long time)")
-    X_train, y_train = load_svmlight_file(train_path, dtype=np.float32, n_features=2000)
-    X_test, y_test = load_svmlight_file(test_path, dtype=np.float32, n_features=2000)
-    X_train, X_test = X_train.toarray(), X_test.toarray()
-    y_train, y_test = y_train.astype(np.int), y_test.astype(np.int)
-    y_train[y_train == -1] = 0
-    y_test[y_test == -1] = 0
+    with Timer("reading dataset (it may take a long time)"):
+        X_train, y_train = load_svmlight_file(train_path, dtype=np.float32, n_features=2000)
+        X_test, y_test = load_svmlight_file(test_path, dtype=np.float32, n_features=2000)
+        X_train, X_test = X_train.toarray(), X_test.toarray()
+        y_train, y_test = y_train.astype(np.int), y_test.astype(np.int)
+        y_train[y_train == -1] = 0
+        y_test[y_test == -1] = 0
 
     if all(sizes is None for sizes in (train_size, valid_size, test_size)):
         train_idx_path = pjoin(path, 'stratified_train_idx.txt')
@@ -870,6 +866,39 @@ def fetch_WINE(path='./data/', fold=0):
     )
 
 
+def fetch_BIKESHARE(path='./data/', fold=0):
+    assert 0 <= fold <= 4, 'fold is only allowed btw 0 and 4, but get %d' % fold
+
+    data_path = pjoin(path, 'bikeshare', 'hour.csv')
+    if not pexists(data_path):
+        os.makedirs(pjoin(path, 'wine'), exist_ok=True)
+        download('https://docs.google.com/uc?id=1sHpV9q3_tK0Uov2iRxT6TzTiRZxyx9K8',
+                 pjoin(path, 'bikeshare.zip'))
+        with ZipFile(pjoin(path, 'bikeshare.zip'), 'r') as zipObj:
+            # Extract all the contents of zip file in current directory
+            zipObj.extractall(path)
+        os.remove(pjoin(path, 'bikeshare.zip'))
+
+    df = pd.read_csv(data_path).set_index('instant')
+    train_cols = ['season', 'yr', 'mnth', 'hr', 'holiday', 'weekday',
+                  'workingday', 'weathersit', 'temp', 'atemp', 'hum', 'windspeed']
+    label = 'cnt'
+
+    X_df = df[train_cols]
+    y_df = df[label].values.astype(np.float32)
+
+    train_idx = pd.read_csv(pjoin(path, 'bikeshare', 'train%d.txt' % fold),
+                            header=None)[0].values
+    test_idx = pd.read_csv(pjoin(path, 'bikeshare', 'test%d.txt' % fold),
+                           header=None)[0].values
+    return dict(
+        X_train=X_df.iloc[train_idx], y_train=y_df[train_idx],
+        X_test=X_df.iloc[test_idx], y_test=y_df[test_idx],
+        problem='regression',
+        quantile_noise=1e-6,
+    )
+
+
 def fetch_ROSSMANN(path='./data/', fold=0):
     train_path = pjoin(path, 'rossmann-store-sales-preprocessed', 'train')
     if not pexists(train_path):
@@ -971,6 +1000,7 @@ DATASETS = {
     # My found
     'ROSSMANN': fetch_ROSSMANN,
     'WINE': fetch_WINE,
+    'BIKESHARE': fetch_BIKESHARE,
     # Multi-task regression
     'SARCOS': fetch_SARCOS,
     'SARCOS0': lambda *args, **kwargs: fetch_SARCOS(*args, target_id=0, **kwargs),

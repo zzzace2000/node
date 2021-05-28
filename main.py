@@ -38,6 +38,7 @@ def get_args():
     parser = argparse.ArgumentParser(description="Fine-tune BiT-M model.")
     parser.add_argument("--name",
                         default='debug',
+                        # default='0517_mimic2_GAM_ga2m_s44_nl3_nt1333_td1_d2_od0.1_ld0.3_cs0.5_lr0.005_lo0_la0.0_pt0_pr0_mn0_ol0_ll1',
                         help="Name of this run. Used for monitoring and checkpointing.")
     parser.add_argument('--seed', type=int, default=None,
                         help='seed for initializing training.')
@@ -47,12 +48,13 @@ def get_args():
                         choices=['year', 'epsilon', 'a9a', 'higgs', 'microsoft',
                                  'yahoo', 'click', 'mimic2', 'adult', 'churn',
                                  'credit', 'compas', 'support2', 'mimic3',
-                                 'rossmann', 'wine', 'sarcos', 'sarcos0',
+                                 'rossmann', 'wine', 'bikeshare', 'sarcos', 'sarcos0',
                                  'sarcos1', 'sarcos2', 'sarcos3', 'sarcos4',
                                  'sarcos5', 'sarcos6'])
     parser.add_argument('--fold', type=int, default=0,
                         help='Choose from 0 to 4, as we only support 5-fold CV.')
-    parser.add_argument("--arch", type=str, default='GAM', choices=['ODST', 'GAM', 'GAMAtt', 'GAMAtt3'])
+    parser.add_argument("--arch", type=str, default='GAM',
+                        choices=['ODST', 'GAM', 'GAMAtt', 'GAMAtt2','GAMAtt3'])
     parser.add_argument("--num_trees", type=int, default=1024)
     parser.add_argument("--num_layers", type=int, default=2)
     parser.add_argument("--depth", type=int, default=1)
@@ -97,9 +99,9 @@ def get_args():
     parser.add_argument("--save_memory", type=int, default=1)
 
     # Pretraining
-    parser.add_argument('--pretrain', type=int, default=0, choices=[0, 1, 2],
+    parser.add_argument('--pretrain', type=int, default=0, choices=[0, 1, 2, 3],
                         help='0: no pretrain. 1: pretrain with mask loss.'
-                             '2: pretrain with MSE loss.')
+                             '2: pretrain with MSE loss. 3: pretrain with MSE; mask outputs')
     parser.add_argument('--pretraining_ratio', type=float, default=0,
                         help='Between 0 and 1, percentage of feature to mask for reconstruction')
     parser.add_argument('--masks_noise', type=float, default=0,
@@ -109,6 +111,11 @@ def get_args():
     parser.add_argument('--finetune_lr', type=float, default=None, nargs='+')
     parser.add_argument('--finetune_freeze_steps', type=int, default=None, nargs='+')
     parser.add_argument('--finetune_data_subsample', type=float, default=None, nargs='+')
+    parser.add_argument('--finetune_zip', type=int, default=0,
+                        help='If set to 0, after pretraining it sends all combinations of '
+                             'fds,flr and frs. If set to 1, then the length of fds, flr and frs '
+                             'need to be the same, and only run the zip(fds, flr, frs). '
+                             'Comes quite handy when running multiple folds.')
     parser.add_argument('--send_pt0', type=int, default=0,
                         help='If it is 1 and pretrain != 0, it sends another job with same hparams'
                              'but with pretrain=0. It serves as a baseline w/ same hparams.')
@@ -118,11 +125,13 @@ def get_args():
     parser.add_argument('--split_train_as_val', type=int, default=0,
                         help='For ODST 6 datasets, they have their own val set. '
                              'Set to 1 will split the train 20% as val set.')
-
+    parser.add_argument('--ignore_prev_runs', type=int, default=0,
+                        help='In random search, ignore previous runs that a param is already searched '
+                             'and finished')
 
     temp_args, _ = parser.parse_known_args()
     if temp_args.name == 'debug':
-        temp_args.arch = 'GAMAtt2'
+        temp_args.arch = 'GAM'
 
     parser = getattr(lib.arch, temp_args.arch + 'Block').add_model_specific_args(parser)
     args = parser.parse_args()
@@ -136,61 +145,67 @@ def get_args():
             os.remove('./logs/hparams/%s' % args.name)
 
         # args.dataset = 'sarcos'
-        args.dataset = 'adult'
+        args.dataset = 'compas'
+        # args.entmoid_min_temp = 0.1
+        # args.entmoid_anneal_steps = 10
+        args.anneal_steps = 300
         args.ga2m = 1
+        args.l2_interactions = 1e-5
         args.pretrain = 0
-        # args.pretrain = 2
+        # args.pretrain = 3
         # args.pretraining_ratio = 0.15
         # args.opt_only_last_layer = 1
-        args.fp16 = 0
+        # args.fp16 = 0
         # args.max_time = 20
         args.max_rounds = 4500
-        args.data_subsample = 1000
+        # args.data_subsample = 1000
 
         # args.masks_noise = 0.1
         args.arch = 'GAMAtt2'
+        args.dim_att = 8
         args.init_bias = True
         args.last_as_output = 0
         args.add_last_linear = 1
         args.last_dropout = 0.2
         # args.arch = 'GAM'
         # args.dim_att = 64
-        args.colsample_bytree = 0.5
+        args.colsample_bytree = 0.2
         # args.colsample_bytree = 1e-5
         args.output_dropout = 0.1
         # args.num_layers = 8
-        args.num_layers = 3
-        args.num_trees = 333
-        args.addi_tree_dim = 0
+        args.num_layers = 2
+        args.num_trees = 500
+        args.addi_tree_dim = 2
         # args.num_trees = 16000 // 8
-        args.depth = 6
+        args.depth = 4
         args.l2_lambda = 1e-5
         args.lr = 0.01
         args.batch_size = None
         # args.batch_size = 1024
         args.depth = 2
-        # args.anneal_steps = 100
         args.freeze_steps = 10
 
     hparams = None
     if pexists(pjoin('logs', 'hparams', args.name)):
         hparams = json.load(open(pjoin('logs', 'hparams', args.name)))
+    elif pexists(pjoin('logs', args.name, 'hparams.json')):
+        hparams = json.load(open(pjoin('logs', args.name, 'hparams.json')))
     elif args.load_from_hparams is not None:
         hparams = json.load(open(pjoin('logs', 'hparams', args.load_from_hparams)))
     elif args.load_from_pretrain is not None:
         assert pexists(pjoin('logs', args.load_from_pretrain, 'MY_IS_FINISHED'))
         hparams = json.load(open(pjoin('logs', 'hparams', args.load_from_pretrain)))
 
+    # Remove default value. Only parse user inputs
+    for action in parser._actions:
+        action.default = argparse.SUPPRESS
+    user_hparams = vars(parser.parse_args())
+
     if hparams is not None:
         cur_hparams = vars(args)
 
-        # Remove default value. Only parse user inputs
-        for action in parser._actions:
-            action.default = argparse.SUPPRESS
-        user_hparams = vars(parser.parse_args())
-        print('Reload and update from inputs: ' + str(user_hparams))
-
         # Update hparams from the previous hparams except user-specified one
+        print('Reload and update from inputs: ' + str(user_hparams))
         cur_hparams.update({k: v for k, v in hparams.items() if k not in user_hparams})
         args = argparse.Namespace(**cur_hparams)
 
@@ -206,8 +221,10 @@ def get_args():
     # Avoid I am too stupid....
     if args.load_from_pretrain is not None:
         args.pretrain = 0
+    if args.arch.startswith('GAMAtt'):
+        assert args.dim_att > 0
 
-    return args
+    return args, user_hparams
 
 
 def main(args) -> None:
@@ -225,7 +242,8 @@ def main(args) -> None:
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
     # Data
-    data = lib.DATASETS[args.dataset.upper()](path='./data', fold=args.fold)
+    with lib.utils.Timer(f'Load dataset {args.dataset}'):
+        data = lib.DATASETS[args.dataset.upper()](path='./data', fold=args.fold)
     qn = args.quantile_noise if getattr(args, 'quantile_noise', None) is not None \
         else data.get('quantile_noise', 1e-3)
     preprocessor = lib.MyPreprocessor(
@@ -286,7 +304,15 @@ def main(args) -> None:
     # Modify based on if doing pretraining!
     if args.pretrain > 0:
         assert args.pretraining_ratio > 0.
-        args.problem = ('pretrain_mask' if args.pretrain == 1 else 'pretrain_recon')
+        if args.pretrain == 1:
+            args.problem = 'pretrain_mask'
+        elif args.pretrain == 2:
+            args.problem = 'pretrain_recon'
+        elif args.pretrain == 3:
+            args.problem = 'pretrain_recon2'
+        else:
+            raise NotImplementedError('Wrong pretrain: ' + str(args.pretrain))
+
         metric = 'pretrain_loss'
         args.num_classes = args.in_features
         args.data_addi_tree_dim = (-args.in_features) + 1
@@ -296,7 +322,7 @@ def main(args) -> None:
 
     print(f'X_train: {X_train.shape}, X_valid: {X_valid.shape}, X_test: {X_test.shape}')
     # Model
-    model, step_callback = getattr(lib.arch, args.arch + 'Block').load_model_by_hparams(
+    model, step_callbacks = getattr(lib.arch, args.arch + 'Block').load_model_by_hparams(
         args, ret_step_callback=True)
 
     # Initialize bias before sending to cuda
@@ -337,8 +363,7 @@ def main(args) -> None:
         lr_warmup_steps=args.lr_warmup_steps,
         verbose=False,
         n_last_checkpoints=5,
-        step_callbacks=[step_callback] if step_callback is not None else [], # Temp annelaing
-        l2_lambda=args.l2_lambda,
+        step_callbacks=step_callbacks, # Temp annelaing
         fp16=args.fp16,
         problem=args.problem,
         pretraining_ratio=args.pretraining_ratio,
@@ -446,9 +471,9 @@ def main(args) -> None:
                     ntf_diff = (torch.sum(torch.abs(cur_ntf - ntf)) * 100.0 / torch.sum(cur_ntf)).item()
                 ntf = cur_ntf
 
-            if trainer.step // args.report_frequency == 1:
+            if trainer.step == 1:
                 print("Step\tVal_Err\tTime(s)\tNTF(%)")
-            print('{}\t{}\t{:.0f}\t{:.2f}'.format(
+            print('{}\t{}\t{:.0f}\t{:.2f}%'.format(
                 trainer.step, np.around(err, 5), recorder.run_time, ntf_diff))
 
         bstep = recorder.best_step_err
@@ -465,7 +490,7 @@ def main(args) -> None:
                 and trainer.step > bstep + args.lr_decay_steps \
                 and trainer.step > (recorder.lr_decay_step + args.lr_decay_steps):
             lr_before = trainer.lr
-            trainer.decrease_lr(ratio=0.2, min_lr=1e-4)
+            trainer.decrease_lr(ratio=0.2, min_lr=1e-6)
             recorder.lr_decay_step = trainer.step
             print('LR: %.2e -> %.2e' % (lr_before, trainer.lr))
 
@@ -617,7 +642,7 @@ def handle_oom_error(e, args, reduce_bs=True):
 
 
 if __name__ == '__main__':
-    args = get_args()
+    args, user_hparams = get_args()
 
     if args.random_search == 0:
         try:
@@ -625,6 +650,29 @@ if __name__ == '__main__':
         finally:
             if pexists(pjoin('is_running', args.name)): # release it
                 os.remove(pjoin('is_running', args.name))
+
+        def run_pretrain_cmd(args):
+            if pexists(pjoin('logs', args.name, 'MY_IS_FINISHED')):
+                print(f'{args.name} already finishes!')
+                return
+
+            if platform.node().startswith('vws'):
+                main(args)
+            else:
+                # Finetuning does not need lots of runs. Save computations!
+                cmd = './my_sbatch -p {} --cpu {} --gpus {} --mem {} ' \
+                      '--name {} python -u main.py ' \
+                      '--load_from_pretrain {} --pretrain 0 --lr {} ' \
+                      '--freeze_steps {} --data_subsample {} ' \
+                      '--early_stopping_rounds 8000 --lr_decay_steps 3800'.format(
+                    os.environ['SLURM_JOB_PARTITION'],
+                    args.cpu, args.gpus, args.mem,
+                    args.name, args.load_from_pretrain,
+                    args.lr, args.freeze_steps,
+                    args.data_subsample,
+                )
+                print(cmd)
+                os.system(cmd)
 
         if args.pretrain:
             orig_name = args.load_from_pretrain = args.name
@@ -639,6 +687,15 @@ if __name__ == '__main__':
                 else [args.data_subsample]
 
             print(f'Sending lr={flrs} freeze_steps={frss} data_subsample={fdss}')
+            if args.finetune_zip:
+                assert len(flrs) == len(frss) == len(fdss), 'Lengths are not equal!'
+                for flr, frs, fds in zip(flrs, frss, fdss):
+                    args.lr = flr
+                    args.freeze_steps = frs
+                    args.data_subsample = fds
+                    args.name = orig_name + f'_fds{fds}_flr{flr}_frs{frs}_ft'
+                    run_pretrain_cmd(args)
+
             for flr in flrs:
                 args.lr = flr
                 for frs in frss:
@@ -648,21 +705,7 @@ if __name__ == '__main__':
                         # Change name coorespondingly
                         args.name = orig_name + f'_fds{fds}_flr{flr}_frs{frs}_ft'
 
-                        if platform.node().startswith('vws'):
-                            main(args)
-                        else:
-                            cmd = './my_sbatch -p {} --cpu {} --gpus {} --mem {} ' \
-                                  '--name {} python -u main.py ' \
-                                  '--load_from_pretrain {} --pretrain 0 --lr {} ' \
-                                  '--freeze_steps {} --data_subsample {}'.format(
-                                      os.environ['SLURM_JOB_PARTITION'],
-                                      args.cpu, args.gpus, args.mem,
-                                      args.name, args.load_from_pretrain,
-                                      args.lr, args.freeze_steps,
-                                      args.data_subsample,
-                                  )
-                            print(cmd)
-                            os.system(cmd)
+                        run_pretrain_cmd(args)
 
         sys.exit()
 
@@ -685,17 +728,27 @@ if __name__ == '__main__':
 
     orig_name, num_random_search = args.name, args.random_search
     args.random_search = 0 # When sending jobs, not run the random search!!
+
+    unsearched_set = {k for k in user_hparams if k in rs_hparams and k not in ['seed']}
+    if len(unsearched_set) > 0:
+        print('Do not random search following attributes:', unsearched_set)
+
     for r in range(num_random_search):
-        for _ in range(20): # Try 20 times if can't found, quit
+        for _ in range(50): # Try 50 times if can't found, quit
             for k, v in rs_hparams.items():
                 if 'gen' in v and v['gen'] is not None:
+                    if k in user_hparams and k not in ['seed']:
+                        continue
                     setattr(args, k, v['gen'](args))
 
             args.name = orig_name + '_' + get_rs_name(args, rs_hparams)
 
-            if pexists(pjoin('is_running', args.name)) \
-                    or pexists(pjoin('logs', args.name, 'MY_IS_FINISHED')):
+            if pexists(pjoin('is_running', args.name)):
                 continue
+
+            if (not args.ignore_prev_runs) and pexists(pjoin('logs', args.name, 'MY_IS_FINISHED')):
+                continue
+
             Path(pjoin('is_running', args.name)).touch()
 
             if platform.node().startswith('vws'):
@@ -704,7 +757,7 @@ if __name__ == '__main__':
                 cmd = './my_sbatch python -u main.py {}'.format(
                     " ".join([f'--{k} {" ".join([str(t) for t in v]) if isinstance(v, list) else v}'
                               for k, v in vars(args).items()
-                              if v is not None and k not in ['random_search']]))
+                              if v is not None and k not in ['random_search', 'ignore_prev_runs']]))
                 os.system(cmd)
 
                 if args.send_pt0 and args.pretrain != 0:
@@ -723,10 +776,15 @@ if __name__ == '__main__':
                         tmp['data_subsample'] = ds
                         tmp['name'] = orig_name + '_' + get_rs_name(tmp, rs_hparams)
 
+                        # Already run. No need submit the job
+                        if pexists(pjoin('logs', tmp['name'], 'MY_IS_FINISHED')):
+                            print(f'{tmp["name"]} already finishes!')
+                            continue
+
                         cmd = './my_sbatch python -u main.py {}'.format(
                             " ".join([f'--{k} {" ".join([str(t) for t in v]) if isinstance(v, list) else v}'
                                       for k, v in tmp.items()
-                                      if v is not None and k not in ['random_search']]))
+                                      if v is not None and k not in ['random_search', 'ignore_prev_runs']]))
                         os.system(cmd)
             break
         else:

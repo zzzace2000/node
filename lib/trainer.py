@@ -26,7 +26,7 @@ class Trainer(nn.Module):
                  Optimizer=torch.optim.Adam, optimizer_params={},
                  lr=0.01, lr_warmup_steps=-1, verbose=False,
                  n_last_checkpoints=1, step_callbacks=[], fp16=0,
-                 l2_lambda=0., problem='classification', pretraining_ratio=0.15,
+                 problem='classification', pretraining_ratio=0.15,
                  masks_noise=0.1, opt_only_last_layer=False, freeze_steps=0, **kwargs):
         """
         :type model: torch.nn.Module
@@ -56,7 +56,6 @@ class Trainer(nn.Module):
         self.step = 0
         self.n_last_checkpoints = n_last_checkpoints
         self.step_callbacks = step_callbacks
-        self.l2_lambda = l2_lambda
         self.fp16 = fp16
         self.problem = problem
         self.pretraining_ratio = pretraining_ratio
@@ -130,6 +129,10 @@ class Trainer(nn.Module):
         self.step = int(checkpoint['step'])
         if self.fp16 and 'amp' in checkpoint:
             amp.load_state_dict(checkpoint['amp'])
+
+        # Set the temperature
+        for c in self.step_callbacks:
+            c(self.step)
 
         if self.verbose:
             print('Loaded ' + path)
@@ -214,15 +217,16 @@ class Trainer(nn.Module):
         # self.opt.zero_grad()
 
         if not self.problem.startswith('pretrain'): # Normal training
-            logits, op = self.model(x_batch, return_outputs_penalty=True)
+            logits, penalty = self.model(x_batch, return_outputs_penalty=True)
             loss = self.loss_function(logits, y_batch).mean()
         else:
-            x_masked, masks = self.mask_input(x_batch)
-            outputs, op = self.model(x_masked, return_outputs_penalty=True)
+            x_masked, masks, masks_noise = self.mask_input(x_batch)
+            feature_masks = masks_noise if self.problem == 'pretrain_recon2' else None
+            outputs, penalty = self.model(x_masked, return_outputs_penalty=True,
+                                          feature_masks=feature_masks)
             loss = self.pretrain_loss(outputs, masks, x_batch)
 
-        if self.l2_lambda > 0.:
-            loss += self.l2_lambda * op
+        loss += penalty
 
         if self.fp16:
             with amp.scale_loss(loss, self.opt) as scaled_loss:
@@ -243,9 +247,9 @@ class Trainer(nn.Module):
         ).to(x_batch.device)
 
         infills = 0.
-        if self.problem == 'pretrain_mask':
-            # Use marginal dist (Gaussian) to in-fill.
-            infills = torch.normal(0, 1, size=masks.shape).to(x_batch.device)
+        # if self.problem == 'pretrain_mask':
+        #     # Use marginal dist (Gaussian) to in-fill.
+        #     infills = torch.normal(0, 1, size=masks.shape).to(x_batch.device)
 
         # To make it more difficult, 10% of the time we do not mask the inputs!
         # Similar to BERT tricks.
@@ -253,18 +257,18 @@ class Trainer(nn.Module):
         if self.masks_noise > 0.:
             new_masks = torch.bernoulli((1. - self.masks_noise) * masks)
         x_batch = (1. - new_masks) * x_batch + new_masks * infills
-        return x_batch, masks
+        return x_batch, masks, new_masks
 
     def pretrain_loss(self, outputs, masks, targets):
-        # BCE loss to predict if that token is the mask. And set target as 0.9
-        if self.problem == 'pretrain_mask':
-            loss = F.binary_cross_entropy_with_logits(
-                outputs, (1. - self.masks_noise) * masks)
-        elif self.problem == 'pretrain_recon':
+        if self.problem.startswith('pretrain_recon'):
             nb_masks = torch.sum(masks, dim=1, keepdim=True)
             nb_masks[nb_masks == 0] = 1
             loss = (((outputs - targets) * masks) ** 2) / nb_masks
             loss = torch.mean(loss)
+        # elif self.problem == 'pretrain_mask':
+        #     # BCE loss to predict if that token is the mask. And set target as 0.9
+        #     loss = F.binary_cross_entropy_with_logits(
+        #         outputs, (1. - self.masks_noise) * masks)
         else:
             raise NotImplementedError('Unknown problem: ' + self.problem)
 
@@ -274,14 +278,14 @@ class Trainer(nn.Module):
         X_test = torch.as_tensor(X_test, device=device)
         self.model.train(False)
         with torch.no_grad():
-            if self.problem == 'pretrain_recon': # no mask
+            if self.problem.startswith('pretrain_recon'): # no mask
                 outputs = process_in_chunks(self.model, X_test, batch_size=batch_size)
                 loss = (((outputs - X_test)) ** 2)
                 loss = torch.mean(loss)
-            elif self.problem == 'pretrain_mask':
-                X_masked, masks = self.mask_input(X_test)
-                outputs = process_in_chunks(self.model, X_masked, batch_size=batch_size)
-                loss = self.pretrain_loss(outputs, masks, X_test)
+            # elif self.problem == 'pretrain_mask':
+            #     X_masked, masks, _ = self.mask_input(X_test)
+            #     outputs = process_in_chunks(self.model, X_masked, batch_size=batch_size)
+            #     loss = self.pretrain_loss(outputs, masks, X_test)
             else:
                 raise NotImplementedError('Unknown problem: ' + self.problem)
 
@@ -347,7 +351,7 @@ class Trainer(nn.Module):
         return logloss
 
     def decrease_lr(self, ratio=0.1, min_lr=1e-6):
-        if self.lr == min_lr:
+        if self.lr <= min_lr:
             return
 
         self.lr *= ratio

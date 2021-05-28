@@ -3,6 +3,7 @@ import numpy as np
 import pandas as pd
 from scipy import interpolate
 import copy
+from pandas.api.types import is_string_dtype
 
 
 def get_GAM_df_by_models(models, x_values_lookup=None, aggregate=True):
@@ -41,8 +42,8 @@ def predict_score(model, X):
 
 
 def predict_score_by_df(GAM_plot_df, X):
-    result = predict_score_with_each_feature_by_df(GAM_plot_df, X)
-    return result.values.sum(axis=1)
+    result = predict_score_with_each_feature_by_df(GAM_plot_df, X, sum_directly=True)
+    return result
 
 
 def predict_score_with_each_feature(model, X):
@@ -51,31 +52,44 @@ def predict_score_with_each_feature(model, X):
     return predict_score_with_each_feature_by_df(GAM_plot_df, X)
 
 
-def predict_score_with_each_feature_by_df(GAM_plot_df, X):
+def predict_score_with_each_feature_by_df(GAM_plot_df, X, sum_directly=False):
     if isinstance(X, np.ndarray):
-        X = pd.DataFrame(X, columns=GAM_plot_df.feat_name.iloc[1:].values.tolist())
+        X = pd.DataFrame(X, columns=GAM_plot_df.feat_name.iloc[1:(X.shape[1]+1)].values.tolist())
 
-    df_lookup = GAM_plot_df.set_index('feat_idx')
+    from tqdm import tqdm
 
-    offset = 0. if -1 not in df_lookup.index else df_lookup.loc[-1].y
-    # scores = np.full(X.shape[0], offset)
-    scores = np.empty((X.shape[0], GAM_plot_df.feat_idx.max() + 2))
-    scores[:, 0] = offset
-    names = ['offset']
+    if sum_directly:
+        scores = np.zeros((X.shape[0]))
+    else:
+        scores = np.empty((X.shape[0], GAM_plot_df.shape[0]))
 
-    for f_idx in range(X.shape[1]):
-        attrs = df_lookup.loc[f_idx]
+    for f_idx, attrs in tqdm(GAM_plot_df.iterrows()):
+        if attrs.feat_idx == -1:
+            offset = attrs.y[0]
+            if sum_directly:
+                scores += offset
+            else:
+                scores[:, f_idx] = offset
+            continue
 
-        score_lookup = pd.Series(attrs.y, index=attrs.x)
+        feat_idx = attrs.feat_idx if not isinstance(attrs.feat_idx, tuple) else list(attrs.feat_idx)
+        truncated_X = X.iloc[:, feat_idx]
+        if isinstance(attrs.feat_idx, tuple):
+            score_lookup = pd.Series(attrs.y, index=attrs.x)
+            truncated_X = pd.MultiIndex.from_frame(truncated_X) # list(truncated_X.itertuples(index=False, name=None))
+        else:
+            score_lookup = pd.Series(attrs.y, index=attrs.x)
+            truncated_X = truncated_X.values
 
-        truncated_X = X.iloc[:, f_idx]
-        # if truncated_X.dtype == object:
-        #     truncated_X = truncated_X.astype('str')
+        if sum_directly:
+            scores += score_lookup[truncated_X].values
+        else:
+            scores[:, (f_idx)] = score_lookup[truncated_X].values
 
-        scores[:, (f_idx+1)] = score_lookup[truncated_X].values
-        names.append(attrs.feat_name)
-
-    return pd.DataFrame(scores, columns=names)
+    if sum_directly:
+        return scores
+    else:
+        return pd.DataFrame(scores, columns=GAM_plot_df.feat_name.values.tolist())
 
 
 def sigmoid(x):
@@ -96,19 +110,20 @@ def get_X_values_counts(X, feature_names=None):
     return X.apply(lambda x: x.value_counts().sort_index().to_dict(), axis=0)
 
 
-def bin_data(X, max_n_bins=255):
+def bin_data(X, max_n_bins=256):
     '''
     Do a quantile binning for the X
     '''
     X = X.copy()
     for col_name, dtype in zip(X.dtypes.index, X.dtypes):
-        if dtype == object: # categorical
+        if is_string_dtype(dtype): # categorical
             continue
 
         col_data = X[col_name].astype(np.float32)
 
-        uniq_vals = set(col_data[~np.isnan(col_data)])
+        uniq_vals = np.unique(col_data[~np.isnan(col_data)])
         if len(uniq_vals) > max_n_bins:
+            print(f'bin features {col_name} with uniq val {len(uniq_vals)} to only {max_n_bins}')
             bins = np.unique(
                 np.quantile(
                     col_data, q=np.linspace(0, 1, max_n_bins + 1),
@@ -254,6 +269,7 @@ def extract_GAM(X, predict_fn, predict_type='binary_logodds', max_n_bins=None):
         weighted_mean = np.average(model_y_val, weights=weights)
         importance = np.average(np.abs(model_y_val - weighted_mean), weights=weights)
         log_odds[feat_name]['importance'] = importance
+        log_odds[feat_name]['counts'] = weights.tolist()
 
         # Centering
         log_odds[feat_name]['y_val'] -= weighted_mean
@@ -265,6 +281,7 @@ def extract_GAM(X, predict_fn, predict_type='binary_logodds', max_n_bins=None):
         'x': None,
         'y': np.full(1, log_odds['offset']['y_val']),
         'importance': -1,
+        'counts': [X.shape[0]],
     }]
 
     for feat_idx, feat_name in enumerate(X.columns):
@@ -274,134 +291,7 @@ def extract_GAM(X, predict_fn, predict_type='binary_logodds', max_n_bins=None):
             'x': log_odds[feat_idx]['x_val'],
             'y': np.array(log_odds[feat_idx]['y_val']),
             'importance': log_odds[feat_idx]['importance'],
+            'counts': log_odds[feat_idx]['counts'],
         })
 
     return pd.DataFrame(results)
-
-
-# def extract_GA2M(X, predict_fn, main_df, interactions,
-#                  predict_type='binary_logodds', max_n_bins=None):
-#     '''
-#     X: input 2d array
-#     predict_fn: the model prediction function
-#     main_df: the df for main effects
-#     interactions: a list of interaction term. E.g. [[0, 1], [0, 2]]
-#     predict_type: choose from ["binary_logodds", "binary_prob", "regression"]
-#         This corresponds to which predict_fn to pass in.
-#     max_n_bins: default set as None (No binning). It bins the value into
-#         this number of buckets to reduce the resulting GAM graph clutterness.
-#         Should set large enough to not change prediction too much.
-#     '''
-#     assert isinstance(X, pd.DataFrame)
-#
-#     if max_n_bins is not None:
-#         X = bin_data(X, max_n_bins=max_n_bins)
-#
-#     # counts
-#     X_value_counts, feat_idxes, feature_names = {}, [], []
-#     for i in interactions:
-#         name = '*'.join([X.columns[j] for j in i])
-#         X_value_counts[tuple(i)] = \
-#             X.iloc[:, i].value_counts().to_dict()
-#         feat_idxes.append(tuple(i))
-#         feature_names.append(name)
-#
-#     # Use the X_values_counts to produce the Xs
-#     log_odds = {'offset': {'y_val': 0.}}
-#     for feat_idx in feat_idxes:
-#         all_xs = list(X_value_counts[feat_idx].keys())
-#
-#         log_odds[feat_idx] = {
-#             'x_val': np.array(all_xs),
-#             'y_val': np.zeros(len(all_xs), dtype=np.float32),
-#         }
-#
-#     # Extract the GAM value from the model
-#     split_lens = [len(log_odds[feat_idx]['x_val']) for feat_idx in feat_idxes]
-#     cum_lens = np.cumsum(split_lens)
-#
-#     first_record = X.iloc[0].values
-#     all_X = first_record.reshape((1, -1)).repeat(1 + np.sum(split_lens), axis=0)
-#
-#     for fidx, s_idx, e_idx in \
-#             zip(feat_idxes, [0] + cum_lens[:-1].tolist(), cum_lens):
-#         # fidx = feat_idx.split('*')
-#         fvs = log_odds[fidx]['x_val']
-#         for i, fv in enumerate(fvs):
-#             for idx, v in zip(fidx, fv):
-#                 all_X[(s_idx+1+i), int(idx)] = v
-#
-#     if predict_type in ['binary_logodds', 'regression']:
-#         score = predict_fn(all_X)
-#     elif predict_type == 'binary_prob':
-#         eps = 1e-8
-#         prob = predict_fn(all_X)
-#
-#         prob = np.clip(prob, eps, 1. - eps)
-#         score = np.log(prob) - np.log(1. - prob)
-#     else:
-#         raise NotImplementedError(f'Unknoen {predict_type}')
-#
-#     log_odds['offset']['y_val'] = score[0]
-#     score[1:] -= score[0]
-#
-#     ys = np.split(score[1:], np.cumsum(split_lens[:-1]))
-#     for f_idx, feat_idx in enumerate(feat_idxes):
-#         log_odds[feat_idx]['y_val'] = ys[f_idx]
-#
-#     # Centering and importances
-#     for feat_idx in feat_idxes:
-#         v = log_odds[feat_idx]
-#
-#         model_y_val = v['y_val']
-#
-#         # Calculate importance
-#         weights = np.array(list(X_value_counts[feat_idx].values()))
-#         weighted_mean = np.average(model_y_val, weights=weights)
-#         importance = np.average(np.abs(model_y_val - weighted_mean), weights=weights)
-#         log_odds[feat_idx]['importance'] = importance
-#
-#         # Centering
-#         log_odds[feat_idx]['y_val'] -= weighted_mean
-#         log_odds['offset']['y_val'] += weighted_mean
-#
-#         # Record weights/counts
-#         log_odds[feat_idx]['counts'] = weights
-#
-#     results = [{
-#         'feat_name': 'offset',
-#         'feat_idx': -1,
-#         'x': None,
-#         'y': np.full(1, log_odds['offset']['y_val']),
-#         'importance': -1,
-#         'counts': None,
-#     }]
-#
-#     for feat_idx, feat_name in zip(feat_idxes, feature_names):
-#         results.append({
-#             'feat_name': feat_name,
-#             'feat_idx': feat_idx,
-#             'x': log_odds[feat_idx]['x_val'],
-#             'y': np.array(log_odds[feat_idx]['y_val']),
-#             'importance': log_odds[feat_idx]['importance'],
-#             'counts': log_odds[feat_idx]['counts'],
-#         })
-#
-#     return pd.DataFrame(results)
-
-
-# def predict_score_by_ga2m_df(ga2m_df, X):
-#     # scores = np.empty((X.shape[0], ga2m_df.shape[0]))
-#     scores = np.zeros(X.shape[0])
-#
-#     for f_idx in range(ga2m_df.shape[0]):
-#         attrs = ga2m_df.iloc[f_idx]
-#         score_lookup = pd.Series(attrs.y, index=attrs.x.astype('str'))
-#
-#         trunc_X = X.iloc[:, list(attrs.feat_idx)].astype(str)
-#         X_tuples = list(trunc_X.itertuples(index=False, name=None))
-#         # scores[:, f_idx] = score_lookup[X_tuples].values
-#         scores += score_lookup[X_tuples].values
-#
-#     # return pd.DataFrame(scores, columns=ga2m_df.feat_name.values)
-#     return scores

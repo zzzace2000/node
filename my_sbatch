@@ -21,7 +21,7 @@ args, unknownargs = parser.parse_known_args()
 
 if args.partition is None:
     # If in vaugan, use t4v2 (the preemption one), else (q) use gpu
-    if platform.node() in ['q.vector.local', 'm']:
+    if platform.node() in ['q.vector.local', 'm', 'q']:
         args.partition = 'gpu'
     elif platform.node() in ['v', 'vremote']:
     # else: #
@@ -33,6 +33,10 @@ if args.partition is None:
 if args.partition == 'cpu':
     args.qos = 'nopreemption'
 
+exclusion = ''
+if platform.node() in ['v', 'vremote']:
+    exclusion = '#SBATCH --exclude=gpu080,gpu111,gpu119'
+
 # if args.qos is None and platform.node() in ['v', 'vremote']:
 #     args.qos = 'normal'
 #
@@ -42,7 +46,6 @@ if args.partition == 'cpu':
 #     print('num_high_jobs:', num_high_jobs)
 #     if num_high_jobs < 4:
 #         args.qos = 'high'
-
 
 temp_file = './tmp_sbatch_file.sh'
 
@@ -57,7 +60,7 @@ with lock:
     
 ## SLURM SUBMIT SCRIPT
 #SBATCH --nodes=1
-#SBATCH --exclude=gpu080,gpu111
+{exclusion}
 
 #SBATCH -p {args.partition}
 #SBATCH --gres=gpu:{args.gpus}

@@ -205,7 +205,8 @@ class _Temp(nn.Module):
     '''
     Shared base class for both Softmax and Gumbel
     '''
-    def __init__(self, max_temp=1., min_temp=0.01, steps=10_000):
+    def __init__(self, max_temp=1., min_temp=0.01, steps=10_000,
+                 sample_soft=False):
         '''
         Annealing temperature from max to min in log10 space
         '''
@@ -213,18 +214,23 @@ class _Temp(nn.Module):
         self.min_temp = min_temp
         self.max_temp = max_temp
         self.steps = steps
+        self.sample_soft = sample_soft
 
         self.all_temps = np.logspace(np.log10(min_temp), np.log10(max_temp), steps)[::-1]
         self.tau = max_temp
 
     def forward(self, logits, dim=-1):
         # During training and under annealing, then run softly
-        if self.training and self.tau > self.min_temp:
+        if self.sample_soft or (self.training and self.tau > self.min_temp):
             return self.forward_with_tau(logits, dim=dim)
 
         # In test time, sample hardly
         with torch.no_grad():
             return my_one_hot(logits, dim=dim).float()
+
+    @property
+    def is_deterministic(self):
+        return (not self.sample_soft) and (not self.training or self.tau <= self.min_temp)
 
     def temp_step_callback(self, step):
         self.tau = self.min_temp if step >= self.steps else self.all_temps[step]
@@ -249,6 +255,15 @@ class EM15Temp(_Temp):
     ''' EntMax15 with temperature scaling '''
     def forward_with_tau(self, logits, dim):
         return entmax15(logits / self.tau, dim=dim)
+
+
+class EMoid15Temp(_Temp):
+    def __init__(self, **kwargs):
+        kwargs['sample_soft'] = True
+        super().__init__(**kwargs)
+
+    def forward_with_tau(self, logits, dim):
+        return entmoid15(logits / self.tau)
 
 
 class Lambda(nn.Module):

@@ -8,7 +8,7 @@ from .utils import check_numpy
 from warnings import warn
 
 
-MIN_LOGITS = -10
+MIN_LOGITS = -20
 
 
 class ODST(ModuleWithInit):
@@ -76,7 +76,7 @@ class ODST(ModuleWithInit):
                 rand_idx = torch.randperm(in_features)[:self.num_sample_feats]
                 self.colsample[rand_idx, nt, 0] = 1.
 
-        if self.num_sample_feats > 1 or (not save_memory):
+        if self.colsample_bytree == 1. or (self.num_sample_feats > 1 or (not save_memory)):
             # To save the memory!
             self.feature_selection_logits = nn.Parameter(
                 torch.zeros([in_features, num_trees, depth]), requires_grad=True
@@ -199,10 +199,10 @@ class GAM_ODST(ODST):
                 f'should sample > 1 feats. But get {self.num_sample_feats}.'
 
         # if more than 1 feature is subsampled, the initialize selection logits
-        if self.num_sample_feats > 1 or (not save_memory):
+        the_depth = 1 if not self.ga2m else 2
+        if self.colsample_bytree == 1. or (self.num_sample_feats > the_depth or (not save_memory)):
             del self.feature_selection_logits
 
-            the_depth = 1 if not self.ga2m else 2
             self.feature_selection_logits = nn.Parameter(
                 torch.zeros([self.in_features, self.num_trees, the_depth]), requires_grad=True
             )
@@ -225,7 +225,7 @@ class GAM_ODST(ODST):
         response = super().initialize(input, eps=eps)
         self.feature_selectors = None
 
-    def get_feature_selection_values(self, input):
+    def get_feature_selection_values(self, input, return_fss=False):
         feature_selectors = self.get_feature_selectors()
         # ^--[in_features, num_trees, depth=1]
 
@@ -234,23 +234,23 @@ class GAM_ODST(ODST):
         if self.selectors_detach: # To save memory
             self.feature_selectors = self.feature_selectors.detach()
 
-        if self.ga2m:
-            self.feature_selectors = self.feature_selectors.sum(dim=-1, keepdim=True)
+        # if self.ga2m:
+        #     self.feature_selectors = self.feature_selectors.
 
         # It needs to multiply by the tree_dim
         if self.tree_dim > 1:
-            self.feature_selectors = self.feature_selectors.repeat(
-                1, 1, self.tree_dim,
-            )
-        self.feature_selectors = self.feature_selectors.view(self.in_features, -1)
-        # ^--[in_features, num_trees * tree_dim]
+            shape = self.feature_selectors.shape
+            self.feature_selectors = self.feature_selectors.unsqueeze(-2).expand(
+                -1, -1, self.tree_dim, -1
+            ).reshape(shape[0], -1, shape[-1])
+            # ^--[in_features, num_trees * tree_dim, depth]
 
         if input.shape[1] > self.in_features:  # The rest are previous layers
             # Check incoming data
             pfs, self.prev_feature_selectors = self.prev_feature_selectors, None
-            assert pfs.shape == (self.in_features, input.shape[1] - self.in_features), \
+            assert pfs.shape[:2] == (self.in_features, input.shape[1] - self.in_features), \
                 'Previous selectors does not have the same shape as the input: %s != %s' \
-                % (pfs.shape, (self.in_features, input.shape[1] - self.in_features))
+                % (pfs.shape[:2], (self.in_features, input.shape[1] - self.in_features))
             fw = self.cal_prev_feat_weights(feature_selectors, pfs)
 
             feature_selectors = torch.cat([feature_selectors, fw], dim=0)
@@ -268,26 +268,32 @@ class GAM_ODST(ODST):
         else:
             if self.depth > 2:
                 fv = fv.repeat(1, 1, int(np.ceil(self.depth / 2)))[..., :self.depth]
-        return fv
-    #
-    # def get_feature_selectors(self):
-    #     fs = super().get_feature_selectors()
-    #     # ^--[in_features, num_trees, 1]
-    #
-    #     fs = fs.expand(*fs.shape[:2], self.depth)
-    #     # ^--[in_features, num_trees, depth]
-    #     return fs
 
-    def cal_prev_feat_weights(self, feature_selectors, pfs):
+        if return_fss:
+            return fv, feature_selectors
+        return fv
+
+    def cal_prev_feat_weights(self, myfs, pfs):
         # Do a row-wise inner product between prev selectors and cur ones
         if not self.ga2m:
-            fw = torch.einsum('ip,icd->pcd', pfs, feature_selectors)
+            fw = torch.einsum('icd,ipd->pcd', myfs, pfs)
         else:
-            p1 = torch.einsum('ic,ip->pc', feature_selectors[:, :, 0], pfs)
-            p2 = torch.einsum('ic,ip->pc', feature_selectors[:, :, 1], pfs)
+            g1 = torch.einsum("dp,dc->pc", pfs[:, :, 0], myfs[:, :, 0])
+            g2 = torch.einsum("dp,dc->pc", pfs[:, :, 1], myfs[:, :, 1])
+            g3 = torch.einsum("dp,dc->pc", pfs[:, :, 1], myfs[:, :, 0])
+            g4 = torch.einsum("dp,dc->pc", pfs[:, :, 0], myfs[:, :, 1])
 
-            fw = (p1 * p2).unsqueeze_(-1)
-            fw = fw.repeat(1, 1, 2)
+            fw = g1 * g2 + g3 * g4
+            # p = torch.einsum("ap,cp->pac", pfs[:, :, 0], pfs[:, :, 1])
+            # my = torch.einsum("at,ct->tac", myfs[:, :, 0], myfs[:, :, 1])
+            # fw = torch.einsum("pac,tac->pt", p + p.permute(0, 2, 1), my + my.permute(0, 2, 1))
+            # torch.einsum('icd,ice->', myfs[:, :, 0], myfs[:, :, 1])
+            #
+            # p1 = torch.einsum('ic,ip->pc', myfs[:, :, 0], pfs)
+            # p2 = torch.einsum('ic,ip->pc', myfs[:, :, 1], pfs)
+
+            # fw = (p1 * p2).unsqueeze_(-1)
+            fw = fw.clamp_(max=1.).unsqueeze_(-1).repeat(1, 1, 2)
         return fw
 
     def post_process(self, feature_selectors):
@@ -301,65 +307,6 @@ class GAM_ODST(ODST):
             fs = self.get_feature_selectors()
             # ^-- [in_features, num_trees, 1]
             return (fs > 0).sum(dim=[1, 2])
-
-    def get_interactions(self):
-        if not self.ga2m:
-            return None
-
-        with torch.no_grad():
-            fs = self.get_feature_selectors()
-            # ^-- [in_features, num_trees, 2]
-            tmp = fs.sum(dim=-1).T
-            # ^-- [num_trees, in_features]
-            r_idx, c_idx = torch.nonzero(tmp, as_tuple=True)
-
-            interactions = []
-            for r in range(self.num_trees):
-                n_interaction = (r_idx == r).sum()
-                if n_interaction > 1:
-                    interactions.append(c_idx[r_idx == r][:2])
-                if n_interaction > 2:
-                    print(f'WARNING: it is not a GA2M with a {n_interaction}-way term. '
-                          f'Only choose the first 2.')
-            if len(interactions) == 0:
-                return None
-
-            interactions = torch.stack(interactions, dim=0)
-            return torch.unique(interactions, dim=0)
-
-
-class GAMAtt3ODST(GAM_ODST):
-    def __init__(self, *args,
-                 prev_in_features=0,
-                 dim_att=-1,
-                 initialize_selection_logits_=nn.init.uniform_,
-                 **kwargs):
-        super().__init__(*args,
-                         initialize_selection_logits_=initialize_selection_logits_,
-                         **kwargs)
-        self.prev_in_features = prev_in_features
-        self.dim_att = dim_att
-
-        if prev_in_features > 0:
-            self.att_key = nn.Parameter(
-                torch.zeros([self.in_features + prev_in_features, dim_att]),
-                requires_grad=True
-            )
-            self.att_query = nn.Parameter(
-                torch.zeros([dim_att, self.num_trees]), requires_grad=True
-            )
-            initialize_selection_logits_(self.att_key)
-            initialize_selection_logits_(self.att_query)
-
-    def post_process(self, feature_selectors):
-        fs = feature_selectors
-        if self.prev_in_features > 0:
-            pfa = torch.einsum('pa,at->pt', self.att_key, self.att_query)
-            fs = entmax15(fs.add_(1e-20).log_().add_(pfa.unsqueeze_(-1)), dim=0)
-        return fs
-
-    def load_state_dict(self, state_dict, strict=True):
-        return super().load_state_dict(state_dict, strict)
 
 
 class GAMAttODST(GAM_ODST):
@@ -390,8 +337,86 @@ class GAMAttODST(GAM_ODST):
         assert self.prev_in_features > 0
 
         fw = super().cal_prev_feat_weights(feature_selectors, pfs)
-        # ^--[prev_in_feats, num_trees, 1]
+        # ^--[prev_in_feats, num_trees, depth=1,2]
 
         pfa = torch.einsum('pa,at->pt', self.att_key, self.att_query)
-        fw = entmax15(fw.add_(1e-20).log_().add_(pfa.unsqueeze_(-1)), dim=0)
+        new_fw = entmax15(fw.add(1e-20).log().add(pfa.unsqueeze_(-1)), dim=0)
+        # new_fw = entmax15((MIN_LOGITS * (1. - fw) + fw * 0.).add(pfa.unsqueeze_(-1)), dim=0)
+        fw = fw * new_fw
         return fw
+
+
+#### For compatability purpose: if it's GA2M, then we have two attention value for 2 depth
+#### If it's GAM, then GAMAtt and GAMAtt2 would perform the same.
+class GAMAtt2ODST(GAM_ODST):
+    def __init__(self, *args,
+                 prev_in_features=0,
+                 dim_att=-1,
+                 initialize_selection_logits_=nn.init.uniform_,
+                 **kwargs):
+        kwargs['fs_normalize'] = False # No need normalization
+        super().__init__(*args,
+                         initialize_selection_logits_=initialize_selection_logits_,
+                         **kwargs)
+
+        self.prev_in_features = prev_in_features
+        self.dim_att = dim_att
+        if prev_in_features > 0:
+            # Save parameter
+            the_depth = 1 if not self.ga2m else 2
+            self.att_key = nn.Parameter(
+                torch.zeros([prev_in_features, dim_att, the_depth]), requires_grad=True
+            )
+            self.att_query = nn.Parameter(
+                torch.zeros([dim_att, self.num_trees, the_depth]), requires_grad=True
+            )
+            initialize_selection_logits_(self.att_key)
+            initialize_selection_logits_(self.att_query)
+
+    def cal_prev_feat_weights(self, feature_selectors, pfs):
+        assert self.prev_in_features > 0
+
+        fw = super().cal_prev_feat_weights(feature_selectors, pfs)
+        # ^--[prev_in_feats, num_trees, depth=1,2]
+
+        pfa = torch.einsum('pad,atd->ptd', self.att_key, self.att_query)
+        new_fw = entmax15(fw.add(1e-20).log().add(pfa), dim=0)
+        # new_fw = entmax15((MIN_LOGITS * (1. - fw) + fw * 0.).add(pfa.unsqueeze_(-1)), dim=0)
+        fw = fw * new_fw
+        return fw
+
+
+class GAMAtt3ODST(GAM_ODST):
+    def __init__(self, *args,
+                 prev_in_features=0,
+                 dim_att=-1,
+                 initialize_selection_logits_=nn.init.uniform_,
+                 **kwargs):
+        super().__init__(*args,
+                         initialize_selection_logits_=initialize_selection_logits_,
+                         **kwargs)
+        self.prev_in_features = prev_in_features
+        self.dim_att = dim_att
+
+        if prev_in_features > 0:
+            the_depth = 1 if not self.ga2m else 2
+            self.att_key = nn.Parameter(
+                torch.zeros([self.in_features + prev_in_features, dim_att, the_depth]),
+                requires_grad=True,
+            )
+            self.att_query = nn.Parameter(
+                torch.zeros([dim_att, self.num_trees, the_depth]), requires_grad=True
+            )
+            initialize_selection_logits_(self.att_key)
+            initialize_selection_logits_(self.att_query)
+
+    def post_process(self, feature_selectors):
+        fs = feature_selectors
+        if self.prev_in_features > 0:
+            pfa = torch.einsum('pad,atd->ptd', self.att_key, self.att_query)
+            new_fs = entmax15(fs.add(1e-20).log().add(pfa), dim=0)
+            fs = new_fs * fs
+        return fs
+
+    def load_state_dict(self, state_dict, strict=True):
+        return super().load_state_dict(state_dict, strict)
